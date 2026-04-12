@@ -1,0 +1,32 @@
+{
+  "name": "@eluvade/rift-echoes",
+  "version": "1.0.0",
+  "description": "Lightweight WebGL module for rendering interactive loot drops with rarity-based visuals.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "webgl",
+    "procedural",
+    "shader",
+    "generator",
+    "loot drops"
+  ],
+  "author": "Eluvade",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Eluvade/rift-echoes.git"
+  },
+  "homepage": "https://github.com/Eluvade/rift-echoes",
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
