@@ -35,6 +35,12 @@ out vec4 fragColor;
 
 const float PI = 3.14159265;
 
+// Ease-out cubic: decelerates toward the end
+float easeOutCubic(float t) {
+  float t1 = 1.0 - t;
+  return 1.0 - t1 * t1 * t1;
+}
+
 void main() {
   float dist = length(v_uv);
   if (dist > 1.0 || dist < 0.05) discard;
@@ -42,45 +48,43 @@ void main() {
   float angle = atan(v_uv.y, v_uv.x);
 
   // Two opposing sides centered at angle=0 and angle=PI
-  // Map angle to [0, PI] distance from nearest axis
-  float a0 = abs(angle);           // distance from 0
-  float aPI = PI - a0;             // distance from PI
+  float a0 = abs(angle);
+  float aPI = PI - a0;
+  float side = min(a0, aPI);
 
-  float side = min(a0, aPI);       // distance from nearest side center
-
-  // Graduated segments: central arc ~60deg (PI/3), then smaller ones
-  // The total angular coverage is about 70deg per side with graduated segments
-  float centralHalf = PI / 6.0;    // 30 deg half-width for central arc
-  float segGap = 0.06;             // gap between segments
+  // Graduated segments with decreasing size
+  float centralHalf = PI / 6.0;   // 30 deg half-width
+  float segGap = 0.08;
 
   float alpha = 0.0;
 
-  // Central segment: ±30 degrees
   if (side < centralHalf) {
     alpha = 1.0;
   }
-  // Second segment pair: 35-48 degrees
   else if (side > centralHalf + segGap && side < centralHalf + segGap + PI / 13.0) {
-    alpha = 0.75;
+    alpha = 0.7;
   }
-  // Third segment pair: 55-62 degrees
   else if (side > centralHalf + segGap * 2.0 + PI / 13.0 && side < centralHalf + segGap * 2.0 + PI / 13.0 + PI / 22.0) {
-    alpha = 0.5;
+    alpha = 0.45;
   }
-  // Fourth tiny segment: 68-71 degrees
   else if (side > centralHalf + segGap * 3.0 + PI / 13.0 + PI / 22.0 && side < centralHalf + segGap * 3.0 + PI / 13.0 + PI / 22.0 + PI / 50.0) {
-    alpha = 0.25;
+    alpha = 0.2;
   }
   else {
     discard;
   }
 
-  // Pulsing rings expanding outward
-  float pulse = fract(dist - v_localTime * 0.8);
-  float ring = smoothstep(0.0, 0.05, pulse) * (1.0 - smoothstep(0.05, 0.12, pulse));
+  // Pulsing rings with ease-out: fast at center, decelerating outward
+  float rawPulse = fract(v_localTime * 0.5);
+  float easedPulse = easeOutCubic(rawPulse);
 
-  // Also show a subtle steady arc
-  float steady = smoothstep(0.9, 0.85, dist) * smoothstep(0.0, 0.1, dist) * 0.15;
+  // Ring position based on eased pulse
+  float ringPos = easedPulse;
+  float ringDelta = abs(dist - ringPos);
+  float ring = smoothstep(0.08, 0.0, ringDelta) * (1.0 - rawPulse * 0.6);
+
+  // Subtle steady outer edge
+  float steady = smoothstep(1.0, 0.85, dist) * smoothstep(0.0, 0.15, dist) * 0.1;
 
   float intensity = (ring + steady) * alpha;
   if (intensity < 0.01) discard;

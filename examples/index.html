@@ -46,11 +46,28 @@
         text-transform: uppercase;
         letter-spacing: 0.1em;
     }
+    .click-zones {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 2;
+    }
+    .click-zone {
+        position: absolute;
+        width: 160px;
+        height: 160px;
+        border-radius: 50%;
+        cursor: pointer;
+        transform: translate(-50%, -50%);
+    }
 </style>
 </head>
 <body>
 <h1>Rift Echoes — Cargo Cache</h1>
 <div class="labels" id="labels"></div>
+<div class="click-zones" id="clickZones"></div>
 <script type="module">
     import { RiftRenderer, Rarity } from '../dist/index.js';
 
@@ -67,6 +84,7 @@
 
     const caches = [];
     const labelsContainer = document.getElementById('labels');
+    const clickZonesContainer = document.getElementById('clickZones');
 
     function layout() {
         const w = window.innerWidth;
@@ -78,17 +96,20 @@
         const cellH = h / rows;
 
         labelsContainer.innerHTML = '';
+        clickZonesContainer.innerHTML = '';
 
         rarities.forEach((r, i) => {
             const col = i % cols;
             const row = Math.floor(i / cols);
-            const x = (col + 0.5) * cellW * dpr;
-            const y = (row + 0.5) * cellH * dpr;
+            const cssX = (col + 0.5) * cellW;
+            const cssY = (row + 0.5) * cellH;
+            const x = cssX * dpr;
+            const y = cssY * dpr;
 
-            if (caches[i]) {
+            if (caches[i] && !caches[i].finished) {
                 caches[i].x = x;
                 caches[i].y = y;
-            } else {
+            } else if (!caches[i]) {
                 caches[i] = renderer.createCargoCache({
                     rarity: r.rarity,
                     x,
@@ -97,19 +118,31 @@
                 });
             }
 
+            // Label below the glow
             const label = document.createElement('div');
             label.className = 'label';
             label.textContent = r.name;
-            label.style.left = `${(col + 0.5) * cellW}px`;
-            label.style.top = `${(row + 0.5) * cellH + 60}px`;
+            label.style.left = `${cssX}px`;
+            label.style.top = `${cssY + 100}px`;
             labelsContainer.appendChild(label);
+
+            // Click zone
+            const zone = document.createElement('div');
+            zone.className = 'click-zone';
+            zone.style.left = `${cssX}px`;
+            zone.style.top = `${cssY}px`;
+            zone.addEventListener('click', () => {
+                if (caches[i] && !caches[i].destroying) {
+                    caches[i].destroy();
+                }
+            });
+            clickZonesContainer.appendChild(zone);
         });
     }
 
     layout();
     window.addEventListener('resize', layout);
 
-    // Expose for console testing: window.caches[0].destroy()
     window.riftCaches = caches;
     window.riftRenderer = renderer;
 </script>

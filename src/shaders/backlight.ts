@@ -10,7 +10,7 @@ void main() {
   float dScale = getDestroyScale(a_destroyTime, u_time);
   vec2 dOffset = getDestroyOffset(a_destroyTime, u_time);
 
-  float baseRadius = a_size * 80.0;
+  float baseRadius = a_size * 120.0;
   float radius = baseRadius * dScale;
 
   vec2 pixelPos = a_position + dOffset + a_quad * radius;
@@ -32,7 +32,19 @@ out vec4 fragColor;
 
 void main() {
   float dist = length(v_uv);
-  float alpha = smoothstep(1.0, 0.0, dist) * 0.6;
+  if (dist > 1.0) discard;
+
+  // Inner cutoff: sharp edge where the "dark circle" would be
+  // innerEdge is ~0.30 of the quad (36px / 120px)
+  float innerEdge = 0.30;
+
+  // Ring glow: ramps up from inner edge, peaks, then fades to outer edge
+  float innerRamp = smoothstep(innerEdge - 0.02, innerEdge + 0.08, dist);
+  float outerFade = 1.0 - smoothstep(0.35, 1.0, dist);
+
+  float alpha = innerRamp * outerFade * 0.8;
+  if (alpha < 0.005) discard;
+
   fragColor = vec4(v_color.rgb * alpha, alpha);
 }
 `;

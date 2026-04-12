@@ -39,27 +39,40 @@ float getDestroyScale(float destroyTime, float time) {
   return 0.0;
 }
 
+// Hash function for pseudo-random per-particle values
+float hash(float n) {
+  return fract(sin(n) * 43758.5453);
+}
+
 void main() {
   float dScale = getDestroyScale(u_destroyTime, u_time);
   vec2 dOffset = getDestroyOffset(u_destroyTime, u_time);
 
-  // Lifecycle: 0..1 repeating
-  float t = fract(u_time * u_speed * 0.3 + a_seed);
+  // Lifecycle: 0..1 repeating, each particle offset by its seed
+  float t = fract(u_time * u_speed * 0.25 + a_seed);
 
-  // Radius: outer -> inner
-  float r = mix(u_outerRadius, u_innerRadius, t) * dScale;
+  // Each particle gets a unique fixed angle from its seed
+  float baseAngle = hash(a_seed * 127.1) * 6.2831853;
 
-  // Angle: deterministic spiral
-  float angle = a_seed * 6.2831853 + t * 3.0;
+  // Small angular drift as it moves inward (non-linear, wobbly)
+  float drift = sin(t * 4.0 + a_seed * 20.0) * 0.3
+              + sin(t * 7.0 + a_seed * 13.0) * 0.15;
+  float angle = baseAngle + drift;
 
-  // Jitter for higher rarities
-  float jitterX = sin(u_time * 12.0 + a_seed * 50.0) * u_jitter;
-  float jitterY = cos(u_time * 9.7 + a_seed * 37.0) * u_jitter;
+  // Radius: spawn at random point between inner and outer, move inward
+  float spawnR = mix(u_innerRadius, u_outerRadius, hash(a_seed * 311.7));
+  float r = mix(spawnR, u_innerRadius, t) * dScale;
 
-  vec2 particleCenter = u_center + dOffset + vec2(cos(angle), sin(angle)) * r + vec2(jitterX, jitterY);
+  // Jitter for higher rarities (fire-like cracklings)
+  float jitterX = sin(u_time * 15.0 + a_seed * 50.0) * u_jitter;
+  float jitterY = cos(u_time * 11.3 + a_seed * 37.0) * u_jitter;
+
+  vec2 particleCenter = u_center + dOffset
+    + vec2(cos(angle), sin(angle)) * r
+    + vec2(jitterX, jitterY);
 
   // Size: shrinks as particle approaches center
-  float size = u_particleSize * (1.0 - t * 0.8) * dScale;
+  float size = u_particleSize * (1.0 - t * 0.7) * dScale;
 
   vec2 pixelPos = particleCenter + a_quad * size;
   vec2 clipPos = (pixelPos / u_resolution) * 2.0 - 1.0;
@@ -67,7 +80,7 @@ void main() {
 
   gl_Position = vec4(clipPos, 0.0, 1.0);
   v_uv = a_quad;
-  v_alpha = 1.0 - t * 0.5;
+  v_alpha = (1.0 - t * 0.6);
 }
 `;
 
@@ -81,7 +94,7 @@ out vec4 fragColor;
 
 void main() {
   float dist = length(v_uv);
-  float circle = 1.0 - smoothstep(0.6, 1.0, dist);
+  float circle = 1.0 - smoothstep(0.5, 1.0, dist);
   if (circle < 0.01) discard;
 
   float alpha = circle * v_alpha;

@@ -10,7 +10,7 @@ export const RARITY_CONFIGS: Record<Rarity, RarityConfig> = {
     starBreathes: false,
   },
   [Rarity.Uncommon]: {
-    color: [1.0, 1.0, 1.0],
+    color: [0.2, 0.9, 0.3],
     particleCount: 3,
     particleSpeed: 0.3,
     starScale: 1.0,

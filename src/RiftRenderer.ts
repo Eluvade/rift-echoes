@@ -4,7 +4,7 @@ import { CargoCache } from './CargoCache.js';
 import { getOrCreateProgram } from './gl/programCache.js';
 import { createQuadBuffer, createInstanceBuffer, setupInstanceAttributes, INSTANCE_STRIDE } from './gl/buffers.js';
 import { backlightVert, backlightFrag } from './shaders/backlight.js';
-import { darkCircleVert, darkCircleFrag } from './shaders/darkCircle.js';
+
 import { starVert, starFrag } from './shaders/star.js';
 import { beaconVert, beaconFrag } from './shaders/beacon.js';
 import { particleVert, particleFrag } from './shaders/particle.js';
@@ -66,7 +66,7 @@ export class RiftRenderer {
   private compilePrograms(): void {
     const gl = this.gl;
     getOrCreateProgram(gl, this.programCache, 'backlight', backlightVert, backlightFrag);
-    getOrCreateProgram(gl, this.programCache, 'darkCircle', darkCircleVert, darkCircleFrag);
+
     getOrCreateProgram(gl, this.programCache, 'star', starVert, starFrag);
     getOrCreateProgram(gl, this.programCache, 'beacon', beaconVert, beaconFrag);
     getOrCreateProgram(gl, this.programCache, 'particle', particleVert, particleFrag);
@@ -74,7 +74,7 @@ export class RiftRenderer {
 
   private setupLayerVAOs(): void {
     const gl = this.gl;
-    for (const layer of ['backlight', 'darkCircle', 'star', 'beacon']) {
+    for (const layer of ['backlight', 'star', 'beacon']) {
       const vao = gl.createVertexArray()!;
       gl.bindVertexArray(vao);
 
@@ -195,16 +195,11 @@ export class RiftRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.instanceData, 0, cacheArray.length * FLOATS_PER_INSTANCE);
 
-    // Layer 1: Backlight (additive)
+    // Layer 1: Backlight ring glow (additive)
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
     this.renderQuadLayer('backlight', cacheArray.length, time, resolution);
 
-    // Layer 2: Dark Circle (standard alpha blend)
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    this.renderQuadLayer('darkCircle', cacheArray.length, time, resolution);
-
     // Layer 3: Beacon (additive)
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
     this.renderQuadLayer('beacon', cacheArray.length, time, resolution);
 
     // Layer 4: Star (additive) — render per rarity group (different star configs)
