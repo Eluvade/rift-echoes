@@ -4,10 +4,10 @@ import { CargoCache } from './CargoCache.js';
 import { getOrCreateProgram } from './gl/programCache.js';
 import { createQuadBuffer, createInstanceBuffer, setupInstanceAttributes, INSTANCE_STRIDE } from './gl/buffers.js';
 import { backlightVert, backlightFrag } from './shaders/backlight.js';
-
 import { starVert, starFrag } from './shaders/star.js';
 import { beaconVert, beaconFrag } from './shaders/beacon.js';
 import { particleVert, particleFrag } from './shaders/particle.js';
+import { coreGlowVert, coreGlowFrag } from './shaders/coreGlow.js';
 
 const FLOATS_PER_INSTANCE = INSTANCE_STRIDE / 4; // 10 floats
 
@@ -66,24 +66,22 @@ export class RiftRenderer {
   private compilePrograms(): void {
     const gl = this.gl;
     getOrCreateProgram(gl, this.programCache, 'backlight', backlightVert, backlightFrag);
-
     getOrCreateProgram(gl, this.programCache, 'star', starVert, starFrag);
     getOrCreateProgram(gl, this.programCache, 'beacon', beaconVert, beaconFrag);
     getOrCreateProgram(gl, this.programCache, 'particle', particleVert, particleFrag);
+    getOrCreateProgram(gl, this.programCache, 'coreGlow', coreGlowVert, coreGlowFrag);
   }
 
   private setupLayerVAOs(): void {
     const gl = this.gl;
-    for (const layer of ['backlight', 'star', 'beacon']) {
+    for (const layer of ['backlight', 'star', 'beacon', 'coreGlow']) {
       const vao = gl.createVertexArray()!;
       gl.bindVertexArray(vao);
 
-      // Bind quad geometry to location 0
       gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-      // Bind instance attributes
       setupInstanceAttributes(gl, this.instanceBuffer);
 
       gl.bindVertexArray(null);
@@ -98,12 +96,10 @@ export class RiftRenderer {
     const vao = gl.createVertexArray()!;
     gl.bindVertexArray(vao);
 
-    // Quad geometry at location 0
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-    // Particle instance data: seed (float) + lifetime (float) = 8 bytes stride
     gl.bindBuffer(gl.ARRAY_BUFFER, this.particleInstanceBuffer);
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 8, 0);
@@ -149,7 +145,6 @@ export class RiftRenderer {
     const gl = this.gl;
     const time = now / 1000 - this.startTime;
 
-    // Resize canvas to match display size
     const dpr = window.devicePixelRatio || 1;
     const w = Math.round(this.canvas.clientWidth * dpr);
     const h = Math.round(this.canvas.clientHeight * dpr);
@@ -163,12 +158,10 @@ export class RiftRenderer {
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.enable(gl.BLEND);
 
-    // Update destroy states
     for (const cache of this.caches) {
       cache.updateDestroy(time);
     }
 
-    // Remove finished caches
     for (const cache of this.caches) {
       if (cache.finished) {
         this.caches.delete(cache);
@@ -183,7 +176,6 @@ export class RiftRenderer {
 
     const resolution: [number, number] = [w, h];
 
-    // Ensure instance buffer is large enough
     this.ensureInstanceCapacity(cacheArray.length);
 
     // Write instance data
@@ -195,17 +187,22 @@ export class RiftRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.instanceData, 0, cacheArray.length * FLOATS_PER_INSTANCE);
 
-    // Layer 1: Backlight ring glow (additive)
+    // All layers use additive blending
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+
+    // Layer 1: Backlight ring glow
     this.renderQuadLayer('backlight', cacheArray.length, time, resolution);
 
-    // Layer 3: Beacon (additive)
+    // Layer 3: Beacon
     this.renderQuadLayer('beacon', cacheArray.length, time, resolution);
 
-    // Layer 4: Star (additive) — render per rarity group (different star configs)
+    // Core glow (before star — gives the star a luminous bed to sit on)
+    this.renderCoreGlowLayer(cacheArray, time, resolution);
+
+    // Layer 4: Star
     this.renderStarLayer(cacheArray, time, resolution);
 
-    // Layer 5: Particles (additive)
+    // Layer 5: Particles
     this.renderParticles(cacheArray, time, resolution);
 
     this.animFrameId = requestAnimationFrame(this.tick);
@@ -220,13 +217,11 @@ export class RiftRenderer {
 
     const gl = this.gl;
 
-    // Recreate instance buffer with new size and re-bind in all VAOs
     gl.deleteBuffer(this.instanceBuffer);
     this.instanceBuffer = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, this.instanceData.byteLength, gl.DYNAMIC_DRAW);
 
-    // Rebind instance attributes in all layer VAOs
     for (const [, vao] of this.layerVAOs) {
       gl.bindVertexArray(vao);
       setupInstanceAttributes(gl, this.instanceBuffer);
@@ -253,6 +248,52 @@ export class RiftRenderer {
     gl.bindVertexArray(null);
   }
 
+  private renderCoreGlowLayer(
+    caches: CargoCache[],
+    time: number,
+    resolution: [number, number],
+  ): void {
+    const gl = this.gl;
+    const program = this.programCache.get('coreGlow')!;
+    const vao = this.layerVAOs.get('coreGlow')!;
+
+    gl.useProgram(program);
+    gl.uniform1f(gl.getUniformLocation(program, 'u_time'), time);
+    gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), resolution[0], resolution[1]);
+
+    gl.bindVertexArray(vao);
+
+    // Group by rarity (different glow params per rarity)
+    const groups = new Map<number, number[]>();
+    for (let i = 0; i < caches.length; i++) {
+      const r = caches[i].rarity;
+      let group = groups.get(r);
+      if (!group) {
+        group = [];
+        groups.set(r, group);
+      }
+      group.push(i);
+    }
+
+    for (const [rarity, indices] of groups) {
+      const config = RARITY_CONFIGS[rarity as keyof typeof RARITY_CONFIGS];
+
+      gl.uniform1f(gl.getUniformLocation(program, 'u_glowRadius'), 74.0);
+      gl.uniform1f(gl.getUniformLocation(program, 'u_particleCount'), config.particleCount);
+      gl.uniform1f(gl.getUniformLocation(program, 'u_particleSpeed'), config.particleSpeed);
+      gl.uniform1f(gl.getUniformLocation(program, 'u_starScale'), config.starScale);
+
+      for (let j = 0; j < indices.length; j++) {
+        caches[indices[j]].writeInstanceData(this.instanceData, j * FLOATS_PER_INSTANCE);
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.instanceData, 0, indices.length * FLOATS_PER_INSTANCE);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, indices.length);
+    }
+
+    gl.bindVertexArray(null);
+  }
+
   private renderStarLayer(
     caches: CargoCache[],
     time: number,
@@ -268,7 +309,6 @@ export class RiftRenderer {
 
     gl.bindVertexArray(vao);
 
-    // Group by rarity for different star configs
     const groups = new Map<number, number[]>();
     for (let i = 0; i < caches.length; i++) {
       const r = caches[i].rarity;
@@ -287,7 +327,6 @@ export class RiftRenderer {
       gl.uniform1f(gl.getUniformLocation(program, 'u_starScale'), config.starScale);
       gl.uniform1f(gl.getUniformLocation(program, 'u_yStretch'), config.starYStretch);
 
-      // Re-upload instance data for this group
       for (let j = 0; j < indices.length; j++) {
         caches[indices[j]].writeInstanceData(this.instanceData, j * FLOATS_PER_INSTANCE);
       }
@@ -326,10 +365,9 @@ export class RiftRenderer {
         config.color[0], config.color[1], config.color[2], 1.0);
       gl.uniform1f(gl.getUniformLocation(program, 'u_destroyTime'), cache.destroyTime);
 
-      const jitter = config.particleSpeed * 2.0;
+      const jitter = config.particleSpeed * 1.5;
       gl.uniform1f(gl.getUniformLocation(program, 'u_jitter'), jitter);
 
-      // Upload particle seeds
       gl.bindBuffer(gl.ARRAY_BUFFER, this.particleInstanceBuffer!);
       gl.bufferData(gl.ARRAY_BUFFER, cache.particleSeeds, gl.DYNAMIC_DRAW);
 
