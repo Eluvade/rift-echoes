@@ -7,23 +7,111 @@
 <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-        background: #000000;
+        background: #111;
         color: #ccc;
         font-family: 'Segoe UI', monospace;
         min-height: 100vh;
+        overflow: hidden;
     }
     h1 {
         text-align: center;
-        padding: 20px;
+        padding: 16px;
         color: #88aaff;
-        font-size: 1.5rem;
+        font-size: 1.3rem;
+        position: relative;
+        z-index: 1;
+    }
+    canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+    }
+    .labels {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 1;
+    }
+    .label {
+        position: absolute;
+        color: #666;
+        font-size: 0.7rem;
+        text-align: center;
+        transform: translate(-50%, 0);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
     }
 </style>
 </head>
 <body>
-<h1>Rift Echoes</h1>
-<script>
-    
+<h1>Rift Echoes — Cargo Cache</h1>
+<div class="labels" id="labels"></div>
+<script type="module">
+    import { RiftRenderer, Rarity } from '../dist/index.js';
+
+    const renderer = new RiftRenderer();
+
+    const rarities = [
+        { rarity: Rarity.Common, name: 'Common' },
+        { rarity: Rarity.Uncommon, name: 'Uncommon' },
+        { rarity: Rarity.Rare, name: 'Rare' },
+        { rarity: Rarity.Epic, name: 'Epic' },
+        { rarity: Rarity.Legendary, name: 'Legendary' },
+        { rarity: Rarity.Unique, name: 'Unique' },
+    ];
+
+    const caches = [];
+    const labelsContainer = document.getElementById('labels');
+
+    function layout() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        const dpr = window.devicePixelRatio || 1;
+        const cols = 3;
+        const rows = 2;
+        const cellW = w / cols;
+        const cellH = h / rows;
+
+        labelsContainer.innerHTML = '';
+
+        rarities.forEach((r, i) => {
+            const col = i % cols;
+            const row = Math.floor(i / cols);
+            const x = (col + 0.5) * cellW * dpr;
+            const y = (row + 0.5) * cellH * dpr;
+
+            if (caches[i]) {
+                caches[i].x = x;
+                caches[i].y = y;
+            } else {
+                caches[i] = renderer.createCargoCache({
+                    rarity: r.rarity,
+                    x,
+                    y,
+                    size: 1.0,
+                });
+            }
+
+            const label = document.createElement('div');
+            label.className = 'label';
+            label.textContent = r.name;
+            label.style.left = `${(col + 0.5) * cellW}px`;
+            label.style.top = `${(row + 0.5) * cellH + 60}px`;
+            labelsContainer.appendChild(label);
+        });
+    }
+
+    layout();
+    window.addEventListener('resize', layout);
+
+    // Expose for console testing: window.caches[0].destroy()
+    window.riftCaches = caches;
+    window.riftRenderer = renderer;
 </script>
 </body>
 </html>
