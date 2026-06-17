@@ -1,37 +1,110 @@
-import { CargoCacheParams, RiftRendererOptions } from './types.js';
-import { RARITY_CONFIGS } from './rarity.js';
+import { CargoCacheParams, RiftRendererOptions, LayerKind, CurveShape } from './types.js';
 import { CargoCache } from './CargoCache.js';
 import { getOrCreateProgram } from './gl/programCache.js';
-import { createQuadBuffer, createInstanceBuffer, setupInstanceAttributes, INSTANCE_STRIDE } from './gl/buffers.js';
-import { backlightVert, backlightFrag } from './shaders/backlight.js';
+import {
+  createQuadBuffer,
+  createInstanceBuffer,
+  setupInstanceAttributes,
+  FLOATS_PER_INSTANCE,
+} from './gl/buffers.js';
+import { Bloom } from './gl/postprocess.js';
+import { sphereVert, sphereFrag } from './shaders/sphere.js';
 import { starVert, starFrag } from './shaders/star.js';
-import { beaconVert, beaconFrag } from './shaders/beacon.js';
-import { particleVert, particleFrag } from './shaders/particle.js';
-import { coreGlowVert, coreGlowFrag } from './shaders/coreGlow.js';
+import { flashVert, flashFrag } from './shaders/flash.js';
+import { particVert, particFrag } from './shaders/partic.js';
+import { ringVert, ringFrag } from './shaders/ring.js';
+import { loadTextures, TextureSet } from './textures.js';
 
-const FLOATS_PER_INSTANCE = INSTANCE_STRIDE / 4; // 10 floats
+interface LayerProgram {
+  program: WebGLProgram;
+  vao: WebGLVertexArrayObject;
+  uniforms: {
+    u_time: WebGLUniformLocation | null;
+    u_resolution: WebGLUniformLocation | null;
+    u_rotationRate: WebGLUniformLocation | null;
+    u_dmp: WebGLUniformLocation | null;
+    u_noiseTex: WebGLUniformLocation | null;
+    u_particTex: WebGLUniformLocation | null;
+    u_sizeCurve: WebGLUniformLocation | null;
+    u_alphaCurve: WebGLUniformLocation | null;
+    u_breathPhase: WebGLUniformLocation | null;
+  };
+}
+
+const LAYER_KINDS: LayerKind[] = ['sphere', 'star', 'flash', 'partic', 'partic2', 'partic3', 'orb', 'ring'];
+
+// Default DMP[0] when a layer config omits one. Numbers come straight from
+// each material's HLSL `GetDynamicParameter(..., MaterialFloat4(...), 0)`.
+const DEFAULT_DMP: Record<LayerKind, [number, number, number, number]> = {
+  sphere:  [0.5, 0.2, 1.0, 1.0],
+  star:    [1.0, 1.0, 1.0, 1.0],
+  flash:   [5.0, 0.05, 2.0, 0.05],
+  partic:  [1.0, 1.0, 1.0, 1.0],
+  partic2: [1.0, 1.0, 1.0, 1.0],
+  partic3: [1.0, 1.0, 1.0, 1.0],
+  orb:     [1.0, 1.0, 1.0, 1.0],
+  ring:    [0.82, 0.05, 1.0, 1.0],   // x = radius, y = thickness
+};
+
+// Curve enum mapping must match evalCurve() in src/shaders/common.ts.
+const CURVE_ID: Record<CurveShape, number> = {
+  bell:     0,
+  bellLow:  1,
+  bellMid:  2,
+  rampUp:   3,
+  rampDown: 4,
+};
+
+// Per-kind defaults so layer specs that don't override curves still match
+// the most common Niagara shape for that material.
+const DEFAULT_SIZE_CURVE: Record<LayerKind, CurveShape> = {
+  sphere:  'bell',
+  star:    'bell',
+  flash:   'rampUp',
+  partic:  'bell',
+  partic2: 'bell',
+  partic3: 'bell',
+  // Body holds full size across its life (overlapping instances average to a
+  // steady orb) rather than pulsing like a bell.
+  orb:     'rampUp',
+  ring:    'rampUp',
+};
+const DEFAULT_ALPHA_CURVE: Record<LayerKind, CurveShape> = {
+  sphere:  'rampDown',
+  star:    'bellLow',
+  flash:   'bellLow',
+  partic:  'bellLow',
+  partic2: 'bellLow',
+  partic3: 'bellLow',
+  orb:     'bell',
+  ring:    'bell',
+};
 
 export class RiftRenderer {
   private canvas: HTMLCanvasElement;
   private gl: WebGL2RenderingContext;
   private programCache = new Map<string, WebGLProgram>();
   private quadBuffer: WebGLBuffer;
+  private instanceBuffer: WebGLBuffer;
+  private instanceData = new Float32Array(0);
+  private instanceCapacity = 0;
+
+  private layers = new Map<LayerKind, LayerProgram>();
+  private textures: TextureSet | null = null;
+  private textureLoad: Promise<void>;
+  private bloom: Bloom;
+
   private caches = new Set<CargoCache>();
+  /** When non-null, freezes the star breath sine at this phase (radians) —
+   *  used by the contact-sheet capture so every cell shows the same phase. */
+  breathPhase: number | null = null;
   private animFrameId = 0;
   private startTime = 0;
+  private lastTickTime = 0;
   private destroyed = false;
 
-  private instanceBuffer: WebGLBuffer;
-  private instanceBufferCapacity = 0;
-  private instanceData = new Float32Array(0);
-
-  private layerVAOs = new Map<string, WebGLVertexArrayObject>();
-
-  private particleVAO: WebGLVertexArrayObject | null = null;
-  private particleInstanceBuffer: WebGLBuffer | null = null;
-
-  constructor(options?: RiftRendererOptions) {
-    if (options?.canvas) {
+  constructor(options: RiftRendererOptions) {
+    if (options.canvas) {
       this.canvas = options.canvas;
     } else {
       this.canvas = document.createElement('canvas');
@@ -53,72 +126,79 @@ export class RiftRenderer {
 
     this.quadBuffer = createQuadBuffer(gl);
     this.instanceBuffer = createInstanceBuffer(gl);
+    this.bloom = new Bloom(gl);
 
-    this.compilePrograms();
-    this.setupLayerVAOs();
-    this.setupParticleVAO();
+    this.compileLayers();
 
     this.startTime = performance.now() / 1000;
+    this.lastTickTime = this.startTime;
     this.tick = this.tick.bind(this);
-    this.animFrameId = requestAnimationFrame(this.tick);
+
+    // Render loop only starts once textures are in. Both flash and partic
+    // shaders sample textures every frame, so a missing texture would render
+    // as solid color (or black, with the fragment discards now in place).
+    this.textureLoad = loadTextures(gl, options.texturePath).then((tex) => {
+      this.textures = tex;
+      this.startTime = performance.now() / 1000;
+      this.lastTickTime = this.startTime;
+      this.animFrameId = requestAnimationFrame(this.tick);
+    });
   }
 
-  private compilePrograms(): void {
-    const gl = this.gl;
-    getOrCreateProgram(gl, this.programCache, 'backlight', backlightVert, backlightFrag);
-    getOrCreateProgram(gl, this.programCache, 'star', starVert, starFrag);
-    getOrCreateProgram(gl, this.programCache, 'beacon', beaconVert, beaconFrag);
-    getOrCreateProgram(gl, this.programCache, 'particle', particleVert, particleFrag);
-    getOrCreateProgram(gl, this.programCache, 'coreGlow', coreGlowVert, coreGlowFrag);
-  }
+  /** Resolves once the renderer is ready to draw. */
+  ready(): Promise<void> { return this.textureLoad; }
 
-  private setupLayerVAOs(): void {
+  private compileLayers(): void {
     const gl = this.gl;
-    for (const layer of ['backlight', 'star', 'beacon', 'coreGlow']) {
+    // partic / partic2 / partic3 share the same shader source — only the
+    // sampler binding differs per draw. Keying by source identity lets the
+    // program cache skip three near-identical compiles.
+    const sources: Record<LayerKind, [string, string]> = {
+      sphere:  [sphereVert, sphereFrag],
+      star:    [starVert,   starFrag],
+      flash:   [flashVert,  flashFrag],
+      partic:  [particVert, particFrag],
+      partic2: [particVert, particFrag],
+      partic3: [particVert, particFrag],
+      orb:     [particVert, particFrag],
+      ring:    [ringVert,   ringFrag],
+    };
+
+    for (const kind of LAYER_KINDS) {
+      const [vs, fs] = sources[kind];
+      // Same key for the partic family (incl. orb) so they reuse one program.
+      const cacheKey = (kind === 'partic2' || kind === 'partic3' || kind === 'orb') ? 'partic' : kind;
+      const program = getOrCreateProgram(gl, this.programCache, cacheKey, vs, fs);
       const vao = gl.createVertexArray()!;
       gl.bindVertexArray(vao);
-
       gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-
       setupInstanceAttributes(gl, this.instanceBuffer);
-
       gl.bindVertexArray(null);
-      this.layerVAOs.set(layer, vao);
+
+      this.layers.set(kind, {
+        program,
+        vao,
+        uniforms: {
+          u_time:         gl.getUniformLocation(program, 'u_time'),
+          u_resolution:   gl.getUniformLocation(program, 'u_resolution'),
+          u_rotationRate: gl.getUniformLocation(program, 'u_rotationRate'),
+          u_dmp:          gl.getUniformLocation(program, 'u_dmp'),
+          u_noiseTex:     gl.getUniformLocation(program, 'u_noiseTex'),
+          u_particTex:    gl.getUniformLocation(program, 'u_particTex'),
+          u_sizeCurve:    gl.getUniformLocation(program, 'u_sizeCurve'),
+          u_alphaCurve:   gl.getUniformLocation(program, 'u_alphaCurve'),
+          u_breathPhase:  gl.getUniformLocation(program, 'u_breathPhase'),
+        },
+      });
     }
-  }
-
-  private setupParticleVAO(): void {
-    const gl = this.gl;
-    this.particleInstanceBuffer = gl.createBuffer()!;
-
-    const vao = gl.createVertexArray()!;
-    gl.bindVertexArray(vao);
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.particleInstanceBuffer);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 8, 0);
-    gl.vertexAttribDivisor(1, 1);
-
-    gl.enableVertexAttribArray(2);
-    gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 8, 4);
-    gl.vertexAttribDivisor(2, 1);
-
-    gl.bindVertexArray(null);
-    this.particleVAO = vao;
   }
 
   createCargoCache(params: CargoCacheParams): CargoCache {
     const time = performance.now() / 1000 - this.startTime;
     const cache = new CargoCache(params, time);
-    cache.onFinished = () => {
-      this.caches.delete(cache);
-    };
+    cache.onFinished = () => { this.caches.delete(cache); };
     this.caches.add(cache);
     return cache;
   }
@@ -130,12 +210,17 @@ export class RiftRenderer {
 
     const gl = this.gl;
     this.programCache.forEach(p => gl.deleteProgram(p));
-    this.layerVAOs.forEach(v => gl.deleteVertexArray(v));
-    if (this.particleVAO) gl.deleteVertexArray(this.particleVAO);
+    this.layers.forEach(l => gl.deleteVertexArray(l.vao));
     gl.deleteBuffer(this.instanceBuffer);
     gl.deleteBuffer(this.quadBuffer);
-    if (this.particleInstanceBuffer) gl.deleteBuffer(this.particleInstanceBuffer);
-
+    this.bloom.destroy();
+    if (this.textures) {
+      gl.deleteTexture(this.textures.noise);
+      gl.deleteTexture(this.textures.lightRing);
+      gl.deleteTexture(this.textures.glow2);
+      gl.deleteTexture(this.textures.cell1);
+      gl.deleteTexture(this.textures.loot);
+    }
     this.caches.clear();
   }
 
@@ -144,7 +229,10 @@ export class RiftRenderer {
 
     const gl = this.gl;
     const time = now / 1000 - this.startTime;
+    const dt = Math.min(0.05, Math.max(0, (now / 1000) - this.lastTickTime));
+    this.lastTickTime = now / 1000;
 
+    // Resize backing store on devicePixelRatio / layout changes
     const dpr = window.devicePixelRatio || 1;
     const w = Math.round(this.canvas.clientWidth * dpr);
     const h = Math.round(this.canvas.clientHeight * dpr);
@@ -152,228 +240,174 @@ export class RiftRenderer {
       this.canvas.width = w;
       this.canvas.height = h;
     }
-    gl.viewport(0, 0, w, h);
+    this.bloom.resize(w, h);
 
+    for (const cache of this.caches) cache.tick(time, dt);
+    for (const cache of this.caches) {
+      if (cache.finished) this.caches.delete(cache);
+    }
+
+    // Scene draws into the HDR FBO (RGBA16F) so additive emissive can
+    // exceed 1.0; bloom.apply() then blurs bright pixels and tonemaps
+    // back to the canvas.
+    this.bloom.bind();
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.enable(gl.BLEND);
-
-    for (const cache of this.caches) {
-      cache.updateDestroy(time);
-    }
-
-    for (const cache of this.caches) {
-      if (cache.finished) {
-        this.caches.delete(cache);
-      }
-    }
-
-    const cacheArray = Array.from(this.caches);
-    if (cacheArray.length === 0) {
-      this.animFrameId = requestAnimationFrame(this.tick);
-      return;
-    }
-
-    const resolution: [number, number] = [w, h];
-
-    this.ensureInstanceCapacity(cacheArray.length);
-
-    // Write instance data
-    for (let i = 0; i < cacheArray.length; i++) {
-      cacheArray[i].writeInstanceData(this.instanceData, i * FLOATS_PER_INSTANCE);
-    }
-
-    // Upload instance data
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.instanceData, 0, cacheArray.length * FLOATS_PER_INSTANCE);
-
-    // All layers use additive blending
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
 
-    // Layer 1: Backlight ring glow
-    this.renderQuadLayer('backlight', cacheArray.length, time, resolution);
+    if (this.caches.size > 0 && this.textures) {
+      this.renderAllLayers(time, w, h);
+    }
 
-    // Layer 3: Beacon
-    this.renderQuadLayer('beacon', cacheArray.length, time, resolution);
-
-    // Core glow (before star — gives the star a luminous bed to sit on)
-    this.renderCoreGlowLayer(cacheArray, time, resolution);
-
-    // Layer 4: Star
-    this.renderStarLayer(cacheArray, time, resolution);
-
-    // Layer 5: Particles
-    this.renderParticles(cacheArray, time, resolution);
+    this.bloom.apply();
 
     this.animFrameId = requestAnimationFrame(this.tick);
   }
 
-  private ensureInstanceCapacity(count: number): void {
-    if (count <= this.instanceBufferCapacity) return;
+  // Niagara composes layers in declared order — back-to-front additive. For
+  // a multi-rarity scene we need to preserve that *per cache*, but emitters
+  // of the same kind across caches can batch into one draw call. We walk
+  // every cache's layer list keyed by (kind, dmp, rotationRate): all live
+  // particles that share those uniforms get packed into one buffer and one
+  // drawArraysInstanced. Distinct uniform tuples become separate draws.
+  private renderAllLayers(time: number, w: number, h: number): void {
+    type Bucket = {
+      kind: LayerKind;
+      dmp: [number, number, number, number];
+      rotationRate: number;
+      sizeCurve: number;
+      alphaCurve: number;
+      sources: { cache: CargoCache; layerIdx: number }[];
+    };
+    const buckets: Bucket[] = [];
 
-    const newCapacity = Math.max(count, this.instanceBufferCapacity * 2, 8);
-    this.instanceData = new Float32Array(newCapacity * FLOATS_PER_INSTANCE);
-    this.instanceBufferCapacity = newCapacity;
+    // Bucket key: kind | rotationRate | dmp | sizeCurve | alphaCurve. Curves
+    // joined the key with DMP because each layer in a rarity can carry its own
+    // alpha_over_life shape (rampDown vs bellLow vs bellMid) and size envelope;
+    // they must be passed as separate uniforms per draw.
+    const bucketIndex = new Map<string, number>();
+
+    for (const cache of this.caches) {
+      for (let i = 0; i < cache.layers.length; i++) {
+        const l = cache.layers[i];
+        if (l.emitter.liveCount === 0) continue;
+        const dmp = l.spec.dmp ?? DEFAULT_DMP[l.spec.kind];
+        const rotationRate = l.emitter.rotationRate;
+        const sizeCurve = CURVE_ID[l.spec.sizeCurve ?? DEFAULT_SIZE_CURVE[l.spec.kind]];
+        const alphaCurve = CURVE_ID[l.spec.alphaCurve ?? DEFAULT_ALPHA_CURVE[l.spec.kind]];
+        const key = `${l.spec.kind}|${rotationRate}|${dmp.join(',')}|${sizeCurve}|${alphaCurve}`;
+        let idx = bucketIndex.get(key);
+        if (idx == null) {
+          idx = buckets.length;
+          bucketIndex.set(key, idx);
+          buckets.push({ kind: l.spec.kind, dmp, rotationRate, sizeCurve, alphaCurve, sources: [] });
+        }
+        buckets[idx].sources.push({ cache, layerIdx: i });
+      }
+    }
+
+    // We *don't* sort buckets — the order they were created in already
+    // reflects the first layer-index we saw for each kind/dmp combo, which
+    // matches Niagara's declared layer order well enough for the visuals.
+    for (const bucket of buckets) {
+      this.drawBucket(bucket, time, w, h);
+    }
+  }
+
+  private drawBucket(
+    bucket: {
+      kind: LayerKind;
+      dmp: [number, number, number, number];
+      rotationRate: number;
+      sizeCurve: number;
+      alphaCurve: number;
+      sources: { cache: CargoCache; layerIdx: number }[];
+    },
+    time: number,
+    w: number,
+    h: number,
+  ): void {
+    const gl = this.gl;
+    const layer = this.layers.get(bucket.kind)!;
+
+    let total = 0;
+    for (const src of bucket.sources) {
+      total += src.cache.layers[src.layerIdx].emitter.liveCount;
+    }
+    if (total === 0) return;
+
+    this.ensureInstanceCapacity(total);
+
+    let written = 0;
+    for (const src of bucket.sources) {
+      const owned = src.cache.layers[src.layerIdx];
+      if (owned.emitter.liveCount === 0) continue;
+      written += owned.emitter.pack(
+        this.instanceData,
+        written * FLOATS_PER_INSTANCE,
+        src.cache.x,
+        src.cache.y,
+        src.cache.config.color,
+        src.cache.destroyTime,
+      );
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.instanceData, 0, total * FLOATS_PER_INSTANCE);
+
+    gl.useProgram(layer.program);
+    gl.uniform1f(layer.uniforms.u_time, time);
+    gl.uniform2f(layer.uniforms.u_resolution, w, h);
+    gl.uniform1f(layer.uniforms.u_rotationRate, bucket.rotationRate);
+    gl.uniform4f(layer.uniforms.u_dmp, bucket.dmp[0], bucket.dmp[1], bucket.dmp[2], bucket.dmp[3]);
+    if (layer.uniforms.u_sizeCurve)  gl.uniform1i(layer.uniforms.u_sizeCurve,  bucket.sizeCurve);
+    if (layer.uniforms.u_alphaCurve) gl.uniform1i(layer.uniforms.u_alphaCurve, bucket.alphaCurve);
+    if (layer.uniforms.u_breathPhase) {
+      gl.uniform1f(layer.uniforms.u_breathPhase, this.breathPhase ?? time * 1.25);
+    }
+
+    if (bucket.kind === 'flash' && this.textures) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.textures.noise);
+      gl.uniform1i(layer.uniforms.u_noiseTex!, 0);
+    } else if ((bucket.kind.startsWith('partic') || bucket.kind === 'orb') && this.textures) {
+      // Texture2D_0 binding by material:
+      //   M_Partic   → T_glow_2
+      //   M_Partic_2 → T_Cell_1
+      //   M_Partic_3 → T_Loot
+      //   orb        → T_SPHERE_texture (the glass-ball body)
+      const tex =
+        bucket.kind === 'partic2' ? this.textures.cell1 :
+        bucket.kind === 'partic3' ? this.textures.loot :
+        bucket.kind === 'orb'     ? this.textures.sphere :
+        this.textures.glow2;
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.uniform1i(layer.uniforms.u_particTex!, 0);
+    }
+
+    gl.bindVertexArray(layer.vao);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, total);
+    gl.bindVertexArray(null);
+  }
+
+  private ensureInstanceCapacity(count: number): void {
+    if (count <= this.instanceCapacity) return;
+    const newCap = Math.max(count, this.instanceCapacity * 2, 32);
+    this.instanceData = new Float32Array(newCap * FLOATS_PER_INSTANCE);
+    this.instanceCapacity = newCap;
 
     const gl = this.gl;
-
     gl.deleteBuffer(this.instanceBuffer);
     this.instanceBuffer = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, this.instanceData.byteLength, gl.DYNAMIC_DRAW);
 
-    for (const [, vao] of this.layerVAOs) {
-      gl.bindVertexArray(vao);
+    for (const layer of this.layers.values()) {
+      gl.bindVertexArray(layer.vao);
       setupInstanceAttributes(gl, this.instanceBuffer);
       gl.bindVertexArray(null);
     }
-  }
-
-  private renderQuadLayer(
-    layer: string,
-    count: number,
-    time: number,
-    resolution: [number, number],
-  ): void {
-    const gl = this.gl;
-    const program = this.programCache.get(layer)!;
-    const vao = this.layerVAOs.get(layer)!;
-
-    gl.useProgram(program);
-    gl.uniform1f(gl.getUniformLocation(program, 'u_time'), time);
-    gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), resolution[0], resolution[1]);
-
-    gl.bindVertexArray(vao);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
-    gl.bindVertexArray(null);
-  }
-
-  private renderCoreGlowLayer(
-    caches: CargoCache[],
-    time: number,
-    resolution: [number, number],
-  ): void {
-    const gl = this.gl;
-    const program = this.programCache.get('coreGlow')!;
-    const vao = this.layerVAOs.get('coreGlow')!;
-
-    gl.useProgram(program);
-    gl.uniform1f(gl.getUniformLocation(program, 'u_time'), time);
-    gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), resolution[0], resolution[1]);
-
-    gl.bindVertexArray(vao);
-
-    // Group by rarity (different glow params per rarity)
-    const groups = new Map<number, number[]>();
-    for (let i = 0; i < caches.length; i++) {
-      const r = caches[i].rarity;
-      let group = groups.get(r);
-      if (!group) {
-        group = [];
-        groups.set(r, group);
-      }
-      group.push(i);
-    }
-
-    for (const [rarity, indices] of groups) {
-      const config = RARITY_CONFIGS[rarity as keyof typeof RARITY_CONFIGS];
-
-      gl.uniform1f(gl.getUniformLocation(program, 'u_glowRadius'), 74.0);
-      gl.uniform1f(gl.getUniformLocation(program, 'u_particleCount'), config.particleCount);
-      gl.uniform1f(gl.getUniformLocation(program, 'u_particleSpeed'), config.particleSpeed);
-      gl.uniform1f(gl.getUniformLocation(program, 'u_starScale'), config.starScale);
-
-      for (let j = 0; j < indices.length; j++) {
-        caches[indices[j]].writeInstanceData(this.instanceData, j * FLOATS_PER_INSTANCE);
-      }
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
-      gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.instanceData, 0, indices.length * FLOATS_PER_INSTANCE);
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, indices.length);
-    }
-
-    gl.bindVertexArray(null);
-  }
-
-  private renderStarLayer(
-    caches: CargoCache[],
-    time: number,
-    resolution: [number, number],
-  ): void {
-    const gl = this.gl;
-    const program = this.programCache.get('star')!;
-    const vao = this.layerVAOs.get('star')!;
-
-    gl.useProgram(program);
-    gl.uniform1f(gl.getUniformLocation(program, 'u_time'), time);
-    gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), resolution[0], resolution[1]);
-
-    gl.bindVertexArray(vao);
-
-    const groups = new Map<number, number[]>();
-    for (let i = 0; i < caches.length; i++) {
-      const r = caches[i].rarity;
-      let group = groups.get(r);
-      if (!group) {
-        group = [];
-        groups.set(r, group);
-      }
-      group.push(i);
-    }
-
-    for (const [rarity, indices] of groups) {
-      const config = RARITY_CONFIGS[rarity as keyof typeof RARITY_CONFIGS];
-      if (config.starScale <= 0) continue;
-
-      gl.uniform1f(gl.getUniformLocation(program, 'u_starScale'), config.starScale);
-      gl.uniform1f(gl.getUniformLocation(program, 'u_yStretch'), config.starYStretch);
-
-      for (let j = 0; j < indices.length; j++) {
-        caches[indices[j]].writeInstanceData(this.instanceData, j * FLOATS_PER_INSTANCE);
-      }
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
-      gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.instanceData, 0, indices.length * FLOATS_PER_INSTANCE);
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, indices.length);
-    }
-
-    gl.bindVertexArray(null);
-  }
-
-  private renderParticles(
-    caches: CargoCache[],
-    time: number,
-    resolution: [number, number],
-  ): void {
-    const gl = this.gl;
-    const program = this.programCache.get('particle')!;
-
-    gl.useProgram(program);
-    gl.uniform1f(gl.getUniformLocation(program, 'u_time'), time);
-    gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), resolution[0], resolution[1]);
-
-    gl.bindVertexArray(this.particleVAO);
-
-    for (const cache of caches) {
-      if (cache.config.particleCount <= 0) continue;
-
-      const config = cache.config;
-      gl.uniform2f(gl.getUniformLocation(program, 'u_center'), cache.x, cache.y);
-      gl.uniform1f(gl.getUniformLocation(program, 'u_innerRadius'), cache.size * 5.0);
-      gl.uniform1f(gl.getUniformLocation(program, 'u_outerRadius'), cache.size * 80.0);
-      gl.uniform1f(gl.getUniformLocation(program, 'u_speed'), config.particleSpeed);
-      gl.uniform1f(gl.getUniformLocation(program, 'u_particleSize'), cache.size * 3.0);
-      gl.uniform4f(gl.getUniformLocation(program, 'u_color'),
-        config.color[0], config.color[1], config.color[2], 1.0);
-      gl.uniform1f(gl.getUniformLocation(program, 'u_destroyTime'), cache.destroyTime);
-
-      const jitter = config.particleSpeed * 1.5;
-      gl.uniform1f(gl.getUniformLocation(program, 'u_jitter'), jitter);
-
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.particleInstanceBuffer!);
-      gl.bufferData(gl.ARRAY_BUFFER, cache.particleSeeds, gl.DYNAMIC_DRAW);
-
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, config.particleCount);
-    }
-
-    gl.bindVertexArray(null);
   }
 }
