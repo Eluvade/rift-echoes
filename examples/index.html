@@ -3,23 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Rift Echoes</title>
+<title>Rift Echoes — Layer Harness</title>
 <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-        background: #111;
+        background: #0a0a0c;
         color: #ccc;
         font-family: 'Segoe UI', monospace;
         min-height: 100vh;
         overflow: hidden;
-    }
-    h1 {
-        text-align: center;
-        padding: 16px;
-        color: #88aaff;
-        font-size: 1.3rem;
-        position: relative;
-        z-index: 1;
     }
     canvas {
         position: absolute;
@@ -28,122 +20,243 @@
         width: 100%;
         height: 100%;
     }
-    .labels {
+    .panel {
         position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
+        top: 12px;
+        left: 12px;
+        z-index: 5;
+        background: rgba(20, 20, 25, 0.85);
+        border: 1px solid #333;
+        padding: 12px 16px;
+        max-width: 320px;
+        font-size: 0.78rem;
+        line-height: 1.5;
+        backdrop-filter: blur(6px);
+    }
+    .panel h2 {
+        font-size: 0.85rem;
+        color: #88aaff;
+        margin-bottom: 6px;
+    }
+    .panel label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+        user-select: none;
+    }
+    .panel input[type=checkbox] { cursor: pointer; }
+    .panel select, .panel input[type=text] {
+        background: #181820;
+        color: #ccc;
+        border: 1px solid #333;
+        padding: 2px 6px;
+        font-family: inherit;
+        font-size: inherit;
+    }
+    .panel .row { margin-bottom: 6px; }
+    .panel .hint { color: #666; font-size: 0.7rem; }
+    .panel code {
+        background: #181820;
+        padding: 1px 4px;
+        color: #99ccff;
+    }
+    .center-marker {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 4px;
+        height: 4px;
+        background: #444;
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
         pointer-events: none;
         z-index: 1;
     }
-    .label {
-        position: absolute;
-        color: #666;
-        font-size: 0.7rem;
-        text-align: center;
-        transform: translate(-50%, 0);
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-    }
-    .click-zones {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        z-index: 2;
-    }
-    .click-zone {
-        position: absolute;
-        width: 160px;
-        height: 160px;
-        border-radius: 50%;
+    .respawn-btn {
+        background: #2a2a35;
+        color: #ccc;
+        border: 1px solid #444;
+        padding: 4px 10px;
         cursor: pointer;
-        transform: translate(-50%, -50%);
+        font-family: inherit;
+        font-size: inherit;
     }
+    .respawn-btn:hover { background: #3a3a48; }
 </style>
 </head>
 <body>
-<h1>Rift Echoes — Cargo Cache</h1>
-<div class="labels" id="labels"></div>
-<div class="click-zones" id="clickZones"></div>
+<div class="center-marker"></div>
+<div class="panel" id="panel">
+    <h2>Cargo Cache Harness</h2>
+    <div class="row">
+        <label>Rarity:
+            <select id="raritySel">
+                <option value="Common">Common</option>
+                <option value="Uncommon">Uncommon</option>
+                <option value="Rare">Rare</option>
+                <option value="Epic">Epic</option>
+                <option value="Legendary">Legendary</option>
+                <option value="Unique">Unique</option>
+            </select>
+        </label>
+    </div>
+    <div class="row">
+        <div>Layers:</div>
+        <div id="layerList"></div>
+    </div>
+    <div class="row">
+        <label>DMP override (single layer): <input type="text" id="dmpInput" placeholder="0.5,0.2,1,1" size="14"></label>
+        <div class="hint">comma-separated 4 floats; leave blank for spec value</div>
+    </div>
+    <div class="row">
+        <button class="respawn-btn" id="respawn">Respawn / destroy()</button>
+    </div>
+    <div class="row hint">
+        URL: <code id="urlEcho">?rarity=Uncommon</code>
+    </div>
+</div>
 <script type="module">
-    import { RiftRenderer, Rarity } from '../dist/index.js';
+    import { RiftRenderer, Rarity, RARITY_CONFIGS } from '../dist/index.js';
 
-    const renderer = new RiftRenderer();
+    // ─── URL state ────────────────────────────────────────────────────────
+    const url = new URL(window.location.href);
+    const params = url.searchParams;
+    const rarityName = params.get('rarity') ?? 'Uncommon';
+    const layersParam = params.get('layers');
+    const dmpParam = params.get('dmp');
 
-    const rarities = [
-        { rarity: Rarity.Common, name: 'Common' },
-        { rarity: Rarity.Uncommon, name: 'Uncommon' },
-        { rarity: Rarity.Rare, name: 'Rare' },
-        { rarity: Rarity.Epic, name: 'Epic' },
-        { rarity: Rarity.Legendary, name: 'Legendary' },
-        { rarity: Rarity.Unique, name: 'Unique' },
-    ];
+    const rarity = Rarity[rarityName] ?? Rarity.Uncommon;
+    const config = RARITY_CONFIGS[rarity];
 
-    const caches = [];
-    const labelsContainer = document.getElementById('labels');
-    const clickZonesContainer = document.getElementById('clickZones');
+    const parseLayers = (s) => s
+        ? s.split(',').map(x => parseInt(x.trim(), 10)).filter(n => !Number.isNaN(n))
+        : null;
+    const parseDmp = (s) => {
+        if (!s) return null;
+        const v = s.split(',').map(parseFloat);
+        return v.length === 4 && v.every(n => !Number.isNaN(n)) ? v : null;
+    };
 
-    function layout() {
-        const w = window.innerWidth;
-        const h = window.innerHeight;
-        const dpr = window.devicePixelRatio || 1;
-        const cols = 3;
-        const rows = 2;
-        const cellW = w / cols;
-        const cellH = h / rows;
+    let layerMask = parseLayers(layersParam);
+    const dmpOverride = parseDmp(dmpParam);
 
-        labelsContainer.innerHTML = '';
-        clickZonesContainer.innerHTML = '';
-
-        rarities.forEach((r, i) => {
-            const col = i % cols;
-            const row = Math.floor(i / cols);
-            const cssX = (col + 0.5) * cellW;
-            const cssY = (row + 0.5) * cellH;
-            const x = cssX * dpr;
-            const y = cssY * dpr;
-
-            if (caches[i] && !caches[i].finished) {
-                caches[i].x = x;
-                caches[i].y = y;
-            } else if (!caches[i]) {
-                caches[i] = renderer.createCargoCache({
-                    rarity: r.rarity,
-                    x,
-                    y,
-                    size: 1.0,
-                });
-            }
-
-            // Label below the glow
-            const label = document.createElement('div');
-            label.className = 'label';
-            label.textContent = r.name;
-            label.style.left = `${cssX}px`;
-            label.style.top = `${cssY + 100}px`;
-            labelsContainer.appendChild(label);
-
-            // Click zone
-            const zone = document.createElement('div');
-            zone.className = 'click-zone';
-            zone.style.left = `${cssX}px`;
-            zone.style.top = `${cssY}px`;
-            zone.addEventListener('click', () => {
-                if (caches[i] && !caches[i].destroying) {
-                    caches[i].destroy();
-                }
-            });
-            clickZonesContainer.appendChild(zone);
-        });
+    // DMP override only applies when exactly one layer is visible (otherwise
+    // it'd be ambiguous which layer to override). We splice it onto a *copy*
+    // of the config layer so we don't mutate RARITY_CONFIGS persistently.
+    if (dmpOverride && layerMask && layerMask.length === 1) {
+        const idx = layerMask[0];
+        if (config.layers[idx]) {
+            config.layers[idx] = { ...config.layers[idx], dmp: dmpOverride };
+        }
     }
 
-    layout();
-    window.addEventListener('resize', layout);
+    // ─── Render setup ─────────────────────────────────────────────────────
+    const renderer = new RiftRenderer({ texturePath: '../reference/' });
 
-    window.riftCaches = caches;
+    // ?freeze=<radians> pins the star breath at a fixed phase so the
+    // contact-sheet captures every cell at the same point in the pulse.
+    const freezeParam = params.get('freeze');
+    if (freezeParam != null && freezeParam !== '') {
+        const f = parseFloat(freezeParam);
+        if (!Number.isNaN(f)) renderer.breathPhase = f;
+    }
+
+    const dpr = () => window.devicePixelRatio || 1;
+    const center = () => [window.innerWidth / 2 * dpr(), window.innerHeight / 2 * dpr()];
+
+    let cache = null;
+    function spawn() {
+        if (cache && !cache.finished) cache.destroy();
+        const [cx, cy] = center();
+        cache = renderer.createCargoCache({
+            rarity,
+            x: cx,
+            y: cy,
+            size: 1.5,  // bigger than default so layer details are visible
+            layerMask: layerMask ?? undefined,
+        });
+        window.riftCache = cache;
+    }
+    spawn();
+
+    window.addEventListener('resize', () => {
+        if (cache && !cache.finished) {
+            const [cx, cy] = center();
+            cache.x = cx;
+            cache.y = cy;
+        }
+    });
+
+    // ─── Panel UI ─────────────────────────────────────────────────────────
+    const raritySel = document.getElementById('raritySel');
+    const layerList = document.getElementById('layerList');
+    const dmpInput  = document.getElementById('dmpInput');
+    const urlEcho   = document.getElementById('urlEcho');
+    const respawn   = document.getElementById('respawn');
+
+    raritySel.value = rarityName;
+
+    config.layers.forEach((spec, idx) => {
+        const row = document.createElement('label');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = !layerMask || layerMask.includes(idx);
+        cb.dataset.idx = idx;
+        const dmpStr = (spec.dmp ?? []).map(n => n.toFixed(2)).join(', ') || '—';
+        row.append(cb, document.createTextNode(`L${idx} ${spec.kind}  ·  dmp [${dmpStr}]`));
+        cb.addEventListener('change', updateMaskFromUI);
+        layerList.appendChild(row);
+    });
+
+    if (dmpOverride) dmpInput.value = dmpOverride.join(',');
+
+    function currentMaskFromCheckboxes() {
+        return Array.from(layerList.querySelectorAll('input[type=checkbox]'))
+            .filter(cb => cb.checked)
+            .map(cb => parseInt(cb.dataset.idx, 10));
+    }
+
+    function pushUrl(next) {
+        const u = new URL(window.location.href);
+        u.search = '';
+        u.searchParams.set('rarity', raritySel.value);
+        if (next.layers && next.layers.length !== config.layers.length) {
+            u.searchParams.set('layers', next.layers.join(','));
+        }
+        if (dmpInput.value.trim()) u.searchParams.set('dmp', dmpInput.value.trim());
+        window.history.replaceState(null, '', u);
+        urlEcho.textContent = u.search || '(no params)';
+    }
+
+    function updateMaskFromUI() {
+        const chosen = currentMaskFromCheckboxes();
+        layerMask = chosen.length === config.layers.length ? null : chosen;
+        pushUrl({ layers: chosen });
+        spawn();
+    }
+
+    raritySel.addEventListener('change', () => {
+        const u = new URL(window.location.href);
+        u.search = '';
+        u.searchParams.set('rarity', raritySel.value);
+        window.location.href = u.toString();
+    });
+
+    dmpInput.addEventListener('change', () => {
+        const u = new URL(window.location.href);
+        u.search = '';
+        u.searchParams.set('rarity', raritySel.value);
+        const chosen = currentMaskFromCheckboxes();
+        if (chosen.length !== config.layers.length) u.searchParams.set('layers', chosen.join(','));
+        if (dmpInput.value.trim()) u.searchParams.set('dmp', dmpInput.value.trim());
+        window.location.href = u.toString();
+    });
+
+    respawn.addEventListener('click', spawn);
+
+    pushUrl({ layers: layerMask ?? config.layers.map((_, i) => i) });
+
     window.riftRenderer = renderer;
 </script>
 </body>

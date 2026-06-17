@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rift Echoes — Layer × Rarity Grid</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    body {
+        background: #07070a;
+        color: #cdd;
+        font-family: 'Segoe UI', sans-serif;
+    }
+    canvas {
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        z-index: 0;
+    }
+    /* Label / gridline overlay sits above the canvas; never eats clicks. */
+    #overlay {
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        z-index: 2;
+        pointer-events: none;
+    }
+    .lbl {
+        position: absolute;
+        font-size: 12px;
+        color: #9fb0d0;
+        white-space: nowrap;
+        transform: translate(-50%, -50%);
+        text-shadow: 0 1px 3px #000, 0 0 6px #000;
+    }
+    .lbl.col { font-weight: 600; color: #aec1ff; }
+    .lbl.row { color: #c9b8e6; }
+    .cellbox {
+        position: absolute;
+        border: 1px solid rgba(120, 130, 160, 0.10);
+    }
+    #title {
+        position: absolute;
+        top: 6px; left: 12px;
+        z-index: 3;
+        font-size: 12px;
+        color: #667;
+    }
+    #freezeNote { color: #556; }
+</style>
+</head>
+<body>
+<div id="title">rift-echoes — layer × rarity grid &nbsp;<span id="freezeNote"></span></div>
+<div id="overlay"></div>
+<script type="module">
+    import { RiftRenderer, Rarity, RARITY_CONFIGS } from '../dist/index.js';
+
+    // ── Grid definition ─────────────────────────────────────────────────────
+    const RARITIES = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Unique'];
+    const ROLES = ['Gradient', 'Ring', 'Star', 'Particles', 'Full'];
+
+    // Map a rarity's layer-kind list onto the display roles (mirrors
+    // scripts/contact.mjs::rolesFor). Returns layer indices per role, or null
+    // when that rarity has no such layer (then the cell is left empty).
+    function rolesFor(kinds) {
+        const ringIdx = kinds.indexOf('ring');
+        const starIdx = kinds.indexOf('star');
+        const particleIdxs = kinds
+            .map((k, i) => ({ k, i }))
+            .filter(({ k, i }) => k === 'partic3' || (k === 'partic' && i !== 0))
+            .map((o) => o.i);
+        return {
+            Gradient: [0],
+            Ring: ringIdx >= 0 ? [ringIdx] : null,
+            Star: starIdx >= 0 ? [starIdx] : null,
+            Particles: particleIdxs.length ? particleIdxs : null,
+            Full: kinds.map((_, i) => i),
+        };
+    }
+
+    // ── URL options ─────────────────────────────────────────────────────────
+    const params = new URL(window.location.href).searchParams;
+    // ?freeze=<radians> pins the star breath (handy for static comparison
+    // screenshots); omit for a live, breathing grid.
+    const freezeParam = params.get('freeze');
+    // ?cell=<px> overrides the auto-fit cell size if you want bigger/smaller.
+    const cellOverride = parseFloat(params.get('cell') ?? '');
+
+    // ── Renderer ────────────────────────────────────────────────────────────
+    const renderer = new RiftRenderer({ texturePath: '../reference/' });
+    if (freezeParam != null && freezeParam !== '') {
+        const f = parseFloat(freezeParam);
+        if (!Number.isNaN(f)) {
+            renderer.breathPhase = f;
+            document.getElementById('freezeNote').textContent = `(breath frozen @ ${f.toFixed(2)} rad)`;
+        }
+    }
+    window.riftRenderer = renderer;
+
+    const dpr = () => window.devicePixelRatio || 1;
+
+    // Layout margins (CSS px): room for column headers on top, row labels left.
+    const PAD_TOP = 50;
+    const PAD_LEFT = 86;
+    const PAD_RIGHT = 12;
+    const PAD_BOTTOM = 12;
+
+    let caches = [];
+
+    function clearCaches() {
+        for (const c of caches) { if (!c.finished) c.destroy(); }
+        caches = [];
+    }
+
+    function buildGrid() {
+        clearCaches();
+        const overlay = document.getElementById('overlay');
+        overlay.innerHTML = '';
+
+        const W = window.innerWidth, H = window.innerHeight;
+        const cols = RARITIES.length, rows = ROLES.length;
+        const gridW = W - PAD_LEFT - PAD_RIGHT;
+        const gridH = H - PAD_TOP - PAD_BOTTOM;
+        const cellW = gridW / cols;
+        const cellH = gridH / rows;
+
+        // Pick a cache `size` that keeps the biggest element (Unique star,
+        // ~340px tall at size 1) comfortably inside a cell. size 1 == native px.
+        const LARGEST = 360;
+        const autoSize = Math.min(cellW, cellH) * 0.82 / LARGEST;
+        const size = Number.isNaN(cellOverride) || cellOverride <= 0
+            ? autoSize
+            : cellOverride / LARGEST;
+
+        const colX = (c) => PAD_LEFT + cellW * (c + 0.5);
+        const rowY = (r) => PAD_TOP + cellH * (r + 0.5);
+
+        // Column headers (rarity names) + faint cell boxes.
+        RARITIES.forEach((name, c) => {
+            const lab = document.createElement('div');
+            lab.className = 'lbl col';
+            lab.style.left = `${colX(c)}px`;
+            lab.style.top = `${PAD_TOP - 16}px`;
+            lab.textContent = name;
+            overlay.appendChild(lab);
+        });
+        // Row labels (role names).
+        ROLES.forEach((role, r) => {
+            const lab = document.createElement('div');
+            lab.className = 'lbl row';
+            lab.style.left = `${PAD_LEFT - 44}px`;
+            lab.style.top = `${rowY(r)}px`;
+            lab.textContent = role;
+            overlay.appendChild(lab);
+        });
+        // Faint cell outlines for visual separation.
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const box = document.createElement('div');
+                box.className = 'cellbox';
+                box.style.left = `${PAD_LEFT + cellW * c}px`;
+                box.style.top = `${PAD_TOP + cellH * r}px`;
+                box.style.width = `${cellW}px`;
+                box.style.height = `${cellH}px`;
+                overlay.appendChild(box);
+            }
+        }
+
+        // Spawn one cache per (role, rarity) cell with the matching layer mask.
+        RARITIES.forEach((name, c) => {
+            const rarity = Rarity[name];
+            const kinds = RARITY_CONFIGS[rarity].layers.map((l) => l.kind);
+            const roleMap = rolesFor(kinds);
+            ROLES.forEach((role, r) => {
+                const idxs = roleMap[role];
+                if (!idxs) return; // cell stays empty (rarity lacks this layer)
+                const cache = renderer.createCargoCache({
+                    rarity,
+                    x: colX(c) * dpr(),
+                    y: rowY(r) * dpr(),
+                    size,
+                    layerMask: role === 'Full' ? undefined : idxs,
+                });
+                caches.push(cache);
+            });
+        });
+    }
+
+    await renderer.ready();
+    buildGrid();
+
+    // Reposition on resize (debounced — full rebuild keeps it simple).
+    let resizeTimer = 0;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(buildGrid, 150);
+    });
+</script>
+</body>
+</html>
