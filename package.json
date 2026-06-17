@@ -27,6 +27,7 @@
   },
   "homepage": "https://github.com/Eluvade/rift-echoes",
   "devDependencies": {
+    "playwright": "^1.60.0",
     "typescript": "^5.4.0"
   }
 }
