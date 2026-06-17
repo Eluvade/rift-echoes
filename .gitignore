@@ -1,2 +1,10 @@
 node_modules/
 dist/
+
+# Dev capture output (screenshots, contact sheets)
+captures/
+
+# Crash detritus
+*.stackdump
+
+reference/
