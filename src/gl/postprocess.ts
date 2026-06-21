@@ -79,6 +79,12 @@ void main() {
   vec3 bloom = texture(u_bloom, v_uv).rgb;
   vec3 hdr = (scene + bloom * u_bloomIntensity) * u_exposure;
   vec3 mapped = aces(hdr);
+  // Saturation boost: the ACES highlight rolloff plus additive white-clipping
+  // cores wash colour out vs the saturated reference. Push chroma back up around
+  // the perceptual luma so the rarity colours read vivid (white cores, having no
+  // chroma, stay white).
+  float luma = dot(mapped, vec3(0.2126, 0.7152, 0.0722));
+  mapped = clamp(mix(vec3(luma), mapped, 1.35), 0.0, 1.0);
   float lum = max(mapped.r, max(mapped.g, mapped.b));
   fragColor = vec4(mapped, lum);
 }`;
