@@ -38,9 +38,11 @@ const STEADY_MS = 2800; // let the continuous emitters fill to steady state
 const label = process.argv[2] ?? '';
 const onlyRarity = process.argv[3];
 const layersArg = process.argv[4]; // e.g. "0" or "0,1" to isolate layers
+const freezeArg = process.argv[5]; // breath phase in radians (pins the pulse)
 const rarities = onlyRarity ? [onlyRarity] : ALL_RARITIES;
 const prefix = label ? `${label}-` : '';
 const layersQuery = layersArg ? `&layers=${layersArg}` : '';
+const freezeQuery = freezeArg ? `&freeze=${freezeArg}` : '';
 
 function startServer() {
   const server = createServer(async (req, res) => {
@@ -86,7 +88,7 @@ for (const rarity of rarities) {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
 
-  const url = `${baseUrl}/examples/index.html?rarity=${rarity}${layersQuery}`;
+  const url = `${baseUrl}/examples/index.html?rarity=${rarity}${layersQuery}${freezeQuery}`;
   await page.goto(url, { waitUntil: 'load' });
 
   // Wait for the renderer to exist + textures to finish loading, then settle.
@@ -97,6 +99,10 @@ for (const rarity of rarities) {
     errors.push(`ready() wait failed: ${e}`);
   }
   await page.waitForTimeout(STEADY_MS);
+  // SwiftShader runs the clamped clock in slow motion, so the wall-clock wait
+  // above doesn't reach steady state. Fast-forward the sim deterministically.
+  try { await page.evaluate(() => window.riftRenderer.advance(5)); } catch {}
+  await page.waitForTimeout(200);
 
   const file = join(OUT, `${prefix}${rarity}.png`);
   await page.screenshot({ path: file });
