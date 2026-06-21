@@ -35,11 +35,45 @@
         text-shadow: 0 1px 3px #000, 0 0 6px #000;
     }
     .lbl.col { font-weight: 600; color: #aec1ff; }
-    .lbl.row { color: #c9b8e6; }
     .cellbox {
         position: absolute;
         border: 1px solid rgba(120, 130, 160, 0.10);
     }
+    /* Per-row control panel, living in the left margin (same band as the row). */
+    .ctrl {
+        position: absolute;
+        pointer-events: auto;
+        padding: 8px 10px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 5px;
+        background: rgba(12, 14, 20, 0.55);
+        border: 1px solid rgba(120, 130, 160, 0.14);
+        border-radius: 6px;
+    }
+    .ctrl-name {
+        font-size: 12px;
+        font-weight: 600;
+        color: #c9b8e6;
+        margin-bottom: 2px;
+    }
+    .cr {
+        display: grid;
+        grid-template-columns: 46px 1fr 38px;
+        align-items: center;
+        gap: 6px;
+        font-size: 10px;
+        color: #8fa0c0;
+    }
+    .cr input[type=range] {
+        width: 100%;
+        height: 14px;
+        accent-color: #8a7adf;
+        cursor: pointer;
+    }
+    .cv { text-align: right; color: #aec1ff; font-variant-numeric: tabular-nums; }
+    .ctrl-empty { font-size: 10px; color: #556; }
     #title {
         position: absolute;
         top: 6px; left: 12px;
@@ -51,14 +85,14 @@
 </style>
 </head>
 <body>
-<div id="title">rift-echoes — layer × rarity grid &nbsp;<span id="freezeNote"></span></div>
+<div id="title">rift-echoes — layer × rarity grid &nbsp;<span id="freezeNote"></span>&nbsp;<span style="color:#556">— drag sliders to tune (in-memory only)</span></div>
 <div id="overlay"></div>
 <script type="module">
     import { RiftRenderer, Rarity, RARITY_CONFIGS } from '../dist/index.js';
 
     // ── Grid definition ─────────────────────────────────────────────────────
     const RARITIES = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Unique'];
-    const ROLES = ['Gradient', 'Ring', 'Star', 'Particles', 'Full'];
+    const ROLES = ['Gradient', 'Ring', 'Star', 'Flare', 'Particles', 'Full'];
 
     // Map a rarity's layer-kind list onto the display roles (mirrors
     // scripts/contact.mjs::rolesFor). Returns layer indices per role, or null
@@ -66,6 +100,7 @@
     function rolesFor(kinds) {
         const ringIdx = kinds.indexOf('ring');
         const starIdx = kinds.indexOf('star');
+        const flareIdx = kinds.indexOf('flare');
         const particleIdxs = kinds
             .map((k, i) => ({ k, i }))
             .filter(({ k, i }) => k === 'partic3' || (k === 'partic' && i !== 0))
@@ -74,17 +109,124 @@
             Gradient: [0],
             Ring: ringIdx >= 0 ? [ringIdx] : null,
             Star: starIdx >= 0 ? [starIdx] : null,
+            Flare: flareIdx >= 0 ? [flareIdx] : null,
             Particles: particleIdxs.length ? particleIdxs : null,
             Full: kinds.map((_, i) => i),
         };
     }
 
+    // Layer indices for a role, per rarity. Yields {rarity, layer, base} for
+    // every (rarity × role-layer) so a control can mutate the whole row at once.
+    function* roleLayers(role) {
+        for (const name of RARITIES) {
+            const rarity = Rarity[name];
+            const kinds = RARITY_CONFIGS[rarity].layers.map((l) => l.kind);
+            const idxs = rolesFor(kinds)[role];
+            if (!idxs) continue;
+            for (const i of idxs) {
+                yield { rarity, layer: RARITY_CONFIGS[rarity].layers[i], base: BASE[rarity].layers[i] };
+            }
+        }
+    }
+    // First (rarity, layer) that has this role — used to read slider defaults.
+    function repLayer(role) {
+        for (const x of roleLayers(role)) return x;
+        return null;
+    }
+
+    // Pristine snapshot of every recipe, so multiplier-style controls (star,
+    // particles) scale from the original per-rarity values instead of compounding.
+    const BASE = structuredClone(RARITY_CONFIGS);
+
+    const scaleSpeed = (v, m) => Array.isArray(v) ? [v[0] * m, v[1] * m] : v * m;
+
+    // ── Control schema ───────────────────────────────────────────────────────
+    // Each role exposes its most important knobs. `apply(layer, base, s)` writes
+    // the slider state `s` onto one role-layer (called for every rarity). Ring &
+    // gradient values are shared across rarities, so they're absolute; star &
+    // particles vary per tier, so they're multipliers off the BASE snapshot.
+    const SCHEMA = {
+        Gradient: {
+            controls: [
+                { key: 'size',  label: 'size',  min: 50,  max: 400, step: 5,    init: (r) => r.layer.emitter.size.value },
+                { key: 'peak',  label: 'peak',  min: 0,   max: 1.0, step: 0.02, init: (r) => r.layer.dmp[1] },
+                { key: 'reach', label: 'reach', min: 0.1, max: 1.0, step: 0.02, init: (r) => r.layer.dmp[2] },
+                { key: 'soft',  label: 'soft',  min: 0.2, max: 2.5, step: 0.05, init: (r) => r.layer.dmp[3] },
+            ],
+            apply(layer, base, s) {
+                layer.emitter.size = { kind: 'fixed', value: s.size };
+                layer.dmp = [0.0, s.peak, s.reach, s.soft];
+            },
+        },
+        Ring: {
+            controls: [
+                { key: 'radius', label: 'radius', min: 0.1, max: 0.9, step: 0.01, init: (r) => r.layer.dmp[0] },
+                { key: 'peak',   label: 'peak',   min: 0,   max: 1.5, step: 0.05, init: (r) => r.layer.dmp[1] },
+                { key: 'reach',  label: 'reach',  min: 0.1, max: 1.0, step: 0.01, init: (r) => r.layer.dmp[2] },
+                { key: 'soft',   label: 'soft',   min: 0.2, max: 2.5, step: 0.05, init: (r) => r.layer.dmp[3] },
+                { key: 'size',   label: 'size',   min: 100, max: 600, step: 10,   init: (r) => r.layer.emitter.size.value },
+            ],
+            apply(layer, base, s) {
+                layer.dmp = [s.radius, s.peak, s.reach, s.soft];
+                layer.emitter.size = { kind: 'fixed', value: s.size };
+            },
+        },
+        Flare: {
+            controls: [
+                { key: 'freq',  label: 'freq',  min: 2,   max: 20,  step: 0.5,  init: (r) => r.layer.dmp[0] },
+                { key: 'speed', label: 'speed', min: 0,   max: 2,   step: 0.05, init: (r) => r.layer.dmp[1] },
+                { key: 'reach', label: 'reach', min: 0.3, max: 1.0, step: 0.02, init: (r) => r.layer.dmp[2] },
+                { key: 'power', label: 'power', min: 0,   max: 3,   step: 0.1,  init: (r) => r.layer.dmp[3] },
+            ],
+            apply(layer, base, s) {
+                layer.dmp = [s.freq, s.speed, s.reach, s.power];
+            },
+        },
+        Star: {
+            controls: [
+                { key: 'sizeMul', label: 'size×',  min: 0.3, max: 2.0, step: 0.05, init: () => 1 },
+                { key: 'armX',    label: 'reachX×', min: 0.3, max: 2.0, step: 0.05, init: () => 1 },
+                { key: 'armY',    label: 'reachY×', min: 0.3, max: 2.0, step: 0.05, init: () => 1 },
+            ],
+            apply(layer, base, s) {
+                layer.emitter.size = { kind: 'fixed', value: base.emitter.size.value * s.sizeMul };
+                layer.dmp = [base.dmp[0] * s.armX, base.dmp[1] * s.armY, base.dmp[2], base.dmp[3]];
+            },
+        },
+        Particles: {
+            controls: [
+                { key: 'countMul', label: 'count×', min: 0.2, max: 3, step: 0.1, init: () => 1 },
+                { key: 'pullMul',  label: 'pull×',  min: 0.2, max: 3, step: 0.1, init: () => 1 },
+                { key: 'dragMul',  label: 'drag×',  min: 0.2, max: 3, step: 0.1, init: () => 1 },
+            ],
+            apply(layer, base, s) {
+                layer.emitter.spawnRate = base.emitter.spawnRate * s.countMul;
+                if (base.emitter.attractToCenter != null) layer.emitter.attractToCenter = base.emitter.attractToCenter * s.pullMul;
+                if (base.emitter.drag != null) layer.emitter.drag = base.emitter.drag * s.dragMul;
+            },
+        },
+        Full: { controls: [] },
+    };
+
+    // Live slider state per role; seeded from the current config.
+    const state = {};
+    for (const role of ROLES) {
+        state[role] = {};
+        const rep = repLayer(role);
+        for (const c of SCHEMA[role].controls) {
+            state[role][c.key] = rep ? c.init(rep) : 0;
+        }
+    }
+
+    function applyRole(role) {
+        const sc = SCHEMA[role];
+        if (!sc.controls.length) return;
+        for (const { layer, base } of roleLayers(role)) sc.apply(layer, base, state[role]);
+    }
+
     // ── URL options ─────────────────────────────────────────────────────────
     const params = new URL(window.location.href).searchParams;
-    // ?freeze=<radians> pins the star breath (handy for static comparison
-    // screenshots); omit for a live, breathing grid.
     const freezeParam = params.get('freeze');
-    // ?cell=<px> overrides the auto-fit cell size if you want bigger/smaller.
     const cellOverride = parseFloat(params.get('cell') ?? '');
 
     // ── Renderer ────────────────────────────────────────────────────────────
@@ -100,43 +242,44 @@
 
     const dpr = () => window.devicePixelRatio || 1;
 
-    // Layout margins (CSS px): room for column headers on top, row labels left.
+    // Layout margins (CSS px): room for column headers on top, and a wide left
+    // margin for the per-row control panels.
     const PAD_TOP = 50;
-    const PAD_LEFT = 86;
+    const PAD_LEFT = 230;
     const PAD_RIGHT = 12;
     const PAD_BOTTOM = 12;
 
     let caches = [];
+    let geom = null; // {cellW, cellH, colX, rowY, size}
 
     function clearCaches() {
-        for (const c of caches) { if (!c.finished) c.destroy(); }
+        for (const c of caches) renderer.removeCargoCache(c);
         caches = [];
     }
 
-    function buildGrid() {
-        clearCaches();
-        const overlay = document.getElementById('overlay');
-        overlay.innerHTML = '';
-
+    function computeGeom() {
         const W = window.innerWidth, H = window.innerHeight;
         const cols = RARITIES.length, rows = ROLES.length;
-        const gridW = W - PAD_LEFT - PAD_RIGHT;
-        const gridH = H - PAD_TOP - PAD_BOTTOM;
-        const cellW = gridW / cols;
-        const cellH = gridH / rows;
-
-        // Pick a cache `size` that keeps the biggest element (Unique star,
-        // ~340px tall at size 1) comfortably inside a cell. size 1 == native px.
-        const LARGEST = 360;
+        const cellW = (W - PAD_LEFT - PAD_RIGHT) / cols;
+        const cellH = (H - PAD_TOP - PAD_BOTTOM) / rows;
+        const LARGEST = 420;
         const autoSize = Math.min(cellW, cellH) * 0.82 / LARGEST;
-        const size = Number.isNaN(cellOverride) || cellOverride <= 0
-            ? autoSize
-            : cellOverride / LARGEST;
+        const size = Number.isNaN(cellOverride) || cellOverride <= 0 ? autoSize : cellOverride / LARGEST;
+        geom = {
+            cellW, cellH, size,
+            colX: (c) => PAD_LEFT + cellW * (c + 0.5),
+            rowY: (r) => PAD_TOP + cellH * (r + 0.5),
+        };
+    }
 
-        const colX = (c) => PAD_LEFT + cellW * (c + 0.5);
-        const rowY = (r) => PAD_TOP + cellH * (r + 0.5);
+    // Build the static overlay: column headers, cell boxes, and the per-row
+    // control panels. Done once per layout (not on every slider change, so the
+    // slider you're dragging keeps its DOM node and focus).
+    function buildOverlay() {
+        const overlay = document.getElementById('overlay');
+        overlay.innerHTML = '';
+        const { cellW, cellH, colX, rowY } = geom;
 
-        // Column headers (rarity names) + faint cell boxes.
         RARITIES.forEach((name, c) => {
             const lab = document.createElement('div');
             lab.className = 'lbl col';
@@ -145,18 +288,9 @@
             lab.textContent = name;
             overlay.appendChild(lab);
         });
-        // Row labels (role names).
-        ROLES.forEach((role, r) => {
-            const lab = document.createElement('div');
-            lab.className = 'lbl row';
-            lab.style.left = `${PAD_LEFT - 44}px`;
-            lab.style.top = `${rowY(r)}px`;
-            lab.textContent = role;
-            overlay.appendChild(lab);
-        });
-        // Faint cell outlines for visual separation.
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
+
+        for (let r = 0; r < ROLES.length; r++) {
+            for (let c = 0; c < RARITIES.length; c++) {
                 const box = document.createElement('div');
                 box.className = 'cellbox';
                 box.style.left = `${PAD_LEFT + cellW * c}px`;
@@ -167,34 +301,101 @@
             }
         }
 
-        // Spawn one cache per (role, rarity) cell with the matching layer mask.
+        ROLES.forEach((role, r) => overlay.appendChild(buildPanel(role, r)));
+    }
+
+    function buildPanel(role, r) {
+        const { cellH } = geom;
+        const panel = document.createElement('div');
+        panel.className = 'ctrl';
+        panel.style.left = `6px`;
+        panel.style.top = `${PAD_TOP + cellH * r + 6}px`;
+        panel.style.width = `${PAD_LEFT - 16}px`;
+        panel.style.height = `${cellH - 12}px`;
+
+        const name = document.createElement('div');
+        name.className = 'ctrl-name';
+        name.textContent = role;
+        panel.appendChild(name);
+
+        const controls = SCHEMA[role].controls;
+        if (!controls.length) {
+            const note = document.createElement('div');
+            note.className = 'ctrl-empty';
+            note.textContent = 'composite of all layers';
+            panel.appendChild(note);
+            return panel;
+        }
+
+        for (const c of controls) {
+            const row = document.createElement('div');
+            row.className = 'cr';
+            const lab = document.createElement('span');
+            lab.textContent = c.label;
+            const input = document.createElement('input');
+            input.type = 'range';
+            input.min = c.min; input.max = c.max; input.step = c.step;
+            input.value = state[role][c.key];
+            const val = document.createElement('span');
+            val.className = 'cv';
+            const fmt = (v) => (c.step < 1 ? Number(v).toFixed(2) : String(Math.round(v)));
+            val.textContent = fmt(input.value);
+            input.addEventListener('input', () => {
+                state[role][c.key] = parseFloat(input.value);
+                val.textContent = fmt(input.value);
+                applyRole(role);
+                scheduleRespawn();
+            });
+            row.append(lab, input, val);
+            panel.appendChild(row);
+        }
+        return panel;
+    }
+
+    function spawnCaches() {
+        clearCaches();
+        const { colX, rowY, size } = geom;
         RARITIES.forEach((name, c) => {
             const rarity = Rarity[name];
             const kinds = RARITY_CONFIGS[rarity].layers.map((l) => l.kind);
             const roleMap = rolesFor(kinds);
             ROLES.forEach((role, r) => {
                 const idxs = roleMap[role];
-                if (!idxs) return; // cell stays empty (rarity lacks this layer)
-                const cache = renderer.createCargoCache({
+                if (!idxs) return;
+                caches.push(renderer.createCargoCache({
                     rarity,
                     x: colX(c) * dpr(),
                     y: rowY(r) * dpr(),
                     size,
                     layerMask: role === 'Full' ? undefined : idxs,
-                });
-                caches.push(cache);
+                }));
             });
         });
     }
 
-    await renderer.ready();
-    buildGrid();
+    // Re-spawn at most once per frame, however fast the slider fires.
+    let respawnQueued = false;
+    function scheduleRespawn() {
+        if (respawnQueued) return;
+        respawnQueued = true;
+        requestAnimationFrame(() => { respawnQueued = false; spawnCaches(); });
+    }
 
-    // Reposition on resize (debounced — full rebuild keeps it simple).
+    function rebuild() {
+        computeGeom();
+        buildOverlay();
+        spawnCaches();
+    }
+
+    // Seed the config from the (default) slider state, then draw.
+    for (const role of ROLES) applyRole(role);
+    await renderer.ready();
+    rebuild();
+
     let resizeTimer = 0;
     window.addEventListener('resize', () => {
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(buildGrid, 150);
+        resizeTimer = setTimeout(rebuild, 150);
     });
 </script>
 </body>
