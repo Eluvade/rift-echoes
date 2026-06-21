@@ -41,6 +41,7 @@ const SCALE = (e: EmitterConfig, s: number): EmitterConfig => {
       : [e.velocityFromPoint[0] * s, e.velocityFromPoint[1] * s];
   }
   if (e.curlNoiseStrength != null) out.curlNoiseStrength = e.curlNoiseStrength * s;
+  if (e.attractToCenter != null) out.attractToCenter = e.attractToCenter * s;
   if (e.positionOffset) out.positionOffset = [e.positionOffset[0] * s, e.positionOffset[1] * s];
   return out;
 };

@@ -27,7 +27,7 @@ export interface CargoCacheParams {
 //   sphere:  (r1, r2, d1, d2) — outer/inner halo radii + depth/sharpness
 //   flash:   (NI_X, NI_Y, out_X, out_y) — inner/outer noise UV scales
 //   partic*: (.r, *, *, *)   — emissive opacity multiplier
-export type LayerKind = 'sphere' | 'star' | 'flash' | 'partic' | 'partic2' | 'partic3' | 'orb' | 'ring';
+export type LayerKind = 'sphere' | 'star' | 'flash' | 'partic' | 'partic2' | 'partic3' | 'orb' | 'ring' | 'glow' | 'flare';
 
 // Niagara FRichCurve shapes the loot-drop graphs use for size_over_life and
 // alpha_over_life. Per the spec header: "all curves have easeInOutSine
@@ -38,7 +38,8 @@ export type LayerKind = 'sphere' | 'star' | 'flash' | 'partic' | 'partic2' | 'pa
 //   bellMid   [0,0, 0.5,0.5, 1,0]    → eased bell × 0.5
 //   rampUp    [0,0, 1,1]             → easeInOutSine(t)
 //   rampDown  [0,1, 1,0]             → 1 - easeInOutSine(t)
-export type CurveShape = 'bell' | 'bellLow' | 'bellMid' | 'rampUp' | 'rampDown';
+//   hold      constant 1.0           → no change over life (static layers)
+export type CurveShape = 'bell' | 'bellLow' | 'bellMid' | 'rampUp' | 'rampDown' | 'hold';
 
 export interface LayerSpec {
   kind: LayerKind;

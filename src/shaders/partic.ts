@@ -57,6 +57,7 @@ ${CURVE_HELPERS}
 uniform sampler2D u_particTex;
 uniform vec4 u_dmp;            // (.r = emissive opacity multiplier, others unused)
 uniform int u_alphaCurve;
+uniform float u_breathPhase;   // star breath — drives the "lit by the star" pulse
 
 in vec2 v_uv;
 in vec4 v_color;
@@ -80,13 +81,26 @@ void main() {
 
   vec3 rgb = v_color.rgb * tex.rgb;
 
+  // Each bubble is its OWN little light source: on top of the textured body we
+  // add a soft, bright radial core. Through the HDR + bloom pass that hot centre
+  // blooms into a small halo, so every particle casts light into the drop rather
+  // than being a flat sprite. pow(1 - r, 3) keeps it a compact glow that decays
+  // before the quad edge (no rectangle).
+  float body = tex.a * radialMask;
+  float lightCore = pow(max(0.0, 1.0 - r), 3.0);
+  float lum = body + lightCore * 0.7;
+
   // alpha_over_life: per-layer curve. The Niagara loot-drop graphs use three
   // shapes for M_Partic — rampDown, bellLow, and bellMid — depending on the
   // emitter slot (e.g. Rare L6 partic_3 uses bellMid; most others use bellLow
   // or rampDown). Particle.alpha (v_color.a) carries the emitter-wide
   // multiplier; DMP.r scales the texture mask further per material.
-  const float EMISSIVE = 6.0;    // partic = the soft body of the orb; bloom does the rest
-  float alpha = evalCurve(u_alphaCurve, v_t) * v_color.a * tex.a * u_dmp.x * EMISSIVE * radialMask;
+  // Lit by the star: the bubbles brighten and dim with the star's breath (a wide
+  // swing so the additive illumination of the whole drop reads strongly), so they
+  // pulse as light sources catching its breath as they drift inward.
+  const float EMISSIVE = 6.5;    // partic = the soft body of the orb; bloom does the rest
+  float alpha = evalCurve(u_alphaCurve, v_t) * v_color.a * lum * u_dmp.x * EMISSIVE
+              * breathLight(u_breathPhase, 0.6, 1.5);
   if (alpha < 0.001) discard;
 
   // Un-premultiplied RGB so SRC_ALPHA/ONE blend yields rgb*alpha per pixel

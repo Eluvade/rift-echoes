@@ -14,10 +14,16 @@
 //   [7]    lifetime  (seconds)
 //   [8]    initial rotation (radians)
 //   [9,10] constant acceleration (ax, ay) — pseudo curl-noise
+//   [11]   wander phase (radians)  — per-particle meander offset
+//   [12]   wander rate  (rad/sec)  — per-particle meander speed
 //
 // Curl noise is approximated as a constant per-particle acceleration vector
 // drawn at spawn — preserves the "particles don't all go the same way" feel
 // without simulating a vector field. Enough for visual parity at this scale.
+// `wander` layers a slowly-rotating per-particle push on top of that, giving
+// each particle an autonomous, weaving path (firefly motion); `swirl` adds a
+// tangential bias so an inward `attractToCenter` reads as a spiral, not a
+// straight bee-line to the core.
 
 export type LifetimeSpec = number | [number, number];
 export type SizeSpec =
@@ -32,6 +38,11 @@ export type SpawnShape =
 
 export interface EmitterConfig {
   spawnRate: number;
+  /** Burst mode: spawn exactly this many particles once, on the first tick,
+   *  then never spawn again (spawnRate is ignored for spawning). Pair with a
+   *  'hold' curve + long lifetime for a single static instance (e.g. the ring)
+   *  that doesn't smear across staggered ages. */
+  burst?: number;
   lifetime: LifetimeSpec;
   size: SizeSpec;
   rotationRate?: number;
@@ -43,6 +54,21 @@ export interface EmitterConfig {
   drag?: number;
   /** Approximated curl-noise: per-particle constant accel magnitude (px/sec²). */
   curlNoiseStrength?: number;
+  /** Inward "suck" toward the emitter origin (px/sec²), recomputed each frame
+   *  from the particle's current offset so it genuinely accelerates to center.
+   *  Pair with an outer `spawnShape` ring + small inward `velocityFromPoint`
+   *  for the L3 "drawn inward" particles. */
+  attractToCenter?: number;
+  /** Tangential acceleration (px/sec²) perpendicular to the radius, so an inward
+   *  pull becomes a spiral. Positive = counter-clockwise. */
+  swirl?: number;
+  /** Meandering "firefly" force (px/sec²): a per-particle push whose direction
+   *  rotates slowly over the particle's life, giving each one an autonomous,
+   *  variable path. Pair with `wanderRate` for the rotation speed. */
+  wanderStrength?: number;
+  /** Wander direction rotation speed (rad/sec). Number or [min,max] sampled per
+   *  particle so they don't all weave in lockstep. Default ~1.0. */
+  wanderRate?: number | [number, number];
   /** If false, initial rotation is 0 (axis-aligned) instead of random — needed
    *  for a clean vertical+horizontal '+' star. Default true. */
   randomRotation?: boolean;
@@ -51,7 +77,7 @@ export interface EmitterConfig {
   positionOffset?: [number, number];
 }
 
-const STRIDE = 11;
+const STRIDE = 13;
 
 const sampleLifetime = (spec: LifetimeSpec): number =>
   typeof spec === 'number' ? spec : spec[0] + Math.random() * (spec[1] - spec[0]);
@@ -77,21 +103,32 @@ export class Emitter {
   readonly config: EmitterConfig;
   readonly rotationRate: number;
   readonly drag: number;
+  private attract: number;
+  private swirl: number;
+  private wander: number;
   private capacity: number;
   private pool: Float32Array;
   private count = 0;
   private spawnAccum = 0;
   private lastTickNow = 0;
+  private bursted = false;
 
   constructor(config: EmitterConfig) {
     this.config = config;
     this.rotationRate = config.rotationRate ?? 0;
     this.drag = config.drag ?? 0;
+    this.attract = config.attractToCenter ?? 0;
+    this.swirl = config.swirl ?? 0;
+    this.wander = config.wanderStrength ?? 0;
 
-    const maxLife = typeof config.lifetime === 'number'
-      ? config.lifetime
-      : config.lifetime[1];
-    this.capacity = Math.max(2, Math.ceil(config.spawnRate * maxLife * 1.25) + 2);
+    if (config.burst != null) {
+      this.capacity = Math.max(2, config.burst);
+    } else {
+      const maxLife = typeof config.lifetime === 'number'
+        ? config.lifetime
+        : config.lifetime[1];
+      this.capacity = Math.max(2, Math.ceil(config.spawnRate * maxLife * 1.25) + 2);
+    }
     this.pool = new Float32Array(this.capacity * STRIDE);
   }
 
@@ -102,10 +139,32 @@ export class Emitter {
     const dragMul = Math.exp(-this.drag * dt);
     for (let i = 0; i < this.count; i++) {
       const b = i * STRIDE;
+      // Per-particle accel = constant curl (pool 9,10) + optional inward pull
+      // toward the origin, recomputed from the current offset so particles
+      // genuinely accelerate as they fall in.
+      let ax = this.pool[b + 9], ay = this.pool[b + 10];
+      const ox = this.pool[b], oy = this.pool[b + 1];
+      if (this.attract > 0 || this.swirl !== 0) {
+        const d = Math.hypot(ox, oy) || 1e-4;
+        // Inward pull toward the origin, recomputed from the live offset so it
+        // genuinely accelerates as the particle falls in.
+        ax -= (ox / d) * this.attract;
+        ay -= (oy / d) * this.attract;
+        // Tangential swirl (perp to radius) turns the fall into a spiral.
+        ax += (-oy / d) * this.swirl;
+        ay += (ox / d) * this.swirl;
+      }
+      if (this.wander !== 0) {
+        // Slowly-rotating per-particle push → autonomous, weaving firefly path.
+        const age = now - this.pool[b + 6];
+        const ang = age * this.pool[b + 12] + this.pool[b + 11];
+        ax += Math.cos(ang) * this.wander;
+        ay += Math.sin(ang) * this.wander;
+      }
       this.pool[b]     += this.pool[b + 2] * dt;
       this.pool[b + 1] += this.pool[b + 3] * dt;
-      this.pool[b + 2]  = this.pool[b + 2] * dragMul + this.pool[b + 9]  * dt;
-      this.pool[b + 3]  = this.pool[b + 3] * dragMul + this.pool[b + 10] * dt;
+      this.pool[b + 2]  = this.pool[b + 2] * dragMul + ax * dt;
+      this.pool[b + 3]  = this.pool[b + 3] * dragMul + ay * dt;
     }
 
     // Evict dead via swap-remove
@@ -125,12 +184,22 @@ export class Emitter {
       }
     }
 
-    this.spawnAccum += dt * this.config.spawnRate;
-    while (this.spawnAccum >= 1.0 && this.count < this.capacity) {
-      this.spawn(now);
-      this.spawnAccum -= 1.0;
+    if (this.config.burst != null) {
+      // Spawn the whole burst once, on the first tick, then never again.
+      if (!this.bursted) {
+        for (let k = 0; k < this.config.burst && this.count < this.capacity; k++) {
+          this.spawn(now);
+        }
+        this.bursted = true;
+      }
+    } else {
+      this.spawnAccum += dt * this.config.spawnRate;
+      while (this.spawnAccum >= 1.0 && this.count < this.capacity) {
+        this.spawn(now);
+        this.spawnAccum -= 1.0;
+      }
+      if (this.count >= this.capacity) this.spawnAccum = 0;
     }
-    if (this.count >= this.capacity) this.spawnAccum = 0;
     this.lastTickNow = now;
   }
 
@@ -195,6 +264,8 @@ export class Emitter {
     this.pool[base + 8] = this.config.randomRotation === false ? 0 : Math.random() * Math.PI * 2;
     this.pool[base + 9]  = ax;
     this.pool[base + 10] = ay;
+    this.pool[base + 11] = Math.random() * Math.PI * 2;                 // wander phase
+    this.pool[base + 12] = sampleSpeed(this.config.wanderRate ?? 1.0);  // wander rate
     this.count++;
   }
 

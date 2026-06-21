@@ -13,6 +13,7 @@ import { starVert, starFrag } from './shaders/star.js';
 import { flashVert, flashFrag } from './shaders/flash.js';
 import { particVert, particFrag } from './shaders/partic.js';
 import { ringVert, ringFrag } from './shaders/ring.js';
+import { flareVert, flareFrag } from './shaders/flare.js';
 import { loadTextures, TextureSet } from './textures.js';
 
 interface LayerProgram {
@@ -31,7 +32,7 @@ interface LayerProgram {
   };
 }
 
-const LAYER_KINDS: LayerKind[] = ['sphere', 'star', 'flash', 'partic', 'partic2', 'partic3', 'orb', 'ring'];
+const LAYER_KINDS: LayerKind[] = ['sphere', 'star', 'flash', 'partic', 'partic2', 'partic3', 'orb', 'ring', 'glow', 'flare'];
 
 // Default DMP[0] when a layer config omits one. Numbers come straight from
 // each material's HLSL `GetDynamicParameter(..., MaterialFloat4(...), 0)`.
@@ -43,7 +44,9 @@ const DEFAULT_DMP: Record<LayerKind, [number, number, number, number]> = {
   partic2: [1.0, 1.0, 1.0, 1.0],
   partic3: [1.0, 1.0, 1.0, 1.0],
   orb:     [1.0, 1.0, 1.0, 1.0],
-  ring:    [0.82, 0.05, 1.0, 1.0],   // x = radius, y = thickness
+  ring:    [0.45, 0.75, 0.5, 0.8],   // x = inner radius, y = peak, z = reach, w = falloff exp
+  glow:    [0.0, 0.6, 0.7, 0.8],     // L0 center gradient (radius 0 = solid-centered)
+  flare:   [7.0, 0.5, 0.95, 1.0],    // x = tongue freq, y = drift speed, z = reach, w = intensity
 };
 
 // Curve enum mapping must match evalCurve() in src/shaders/common.ts.
@@ -53,6 +56,7 @@ const CURVE_ID: Record<CurveShape, number> = {
   bellMid:  2,
   rampUp:   3,
   rampDown: 4,
+  hold:     5,
 };
 
 // Per-kind defaults so layer specs that don't override curves still match
@@ -67,7 +71,11 @@ const DEFAULT_SIZE_CURVE: Record<LayerKind, CurveShape> = {
   // Body holds full size across its life (overlapping instances average to a
   // steady orb) rather than pulsing like a bell.
   orb:     'rampUp',
-  ring:    'rampUp',
+  // The ring is a single static `burst` instance — it holds its size/alpha
+  // rather than ramping, so it reads as one steady circle.
+  ring:    'hold',
+  glow:    'hold',
+  flare:   'hold',
 };
 const DEFAULT_ALPHA_CURVE: Record<LayerKind, CurveShape> = {
   sphere:  'rampDown',
@@ -77,7 +85,9 @@ const DEFAULT_ALPHA_CURVE: Record<LayerKind, CurveShape> = {
   partic2: 'bellLow',
   partic3: 'bellLow',
   orb:     'bell',
-  ring:    'bell',
+  ring:    'hold',
+  glow:    'hold',
+  flare:   'hold',
 };
 
 export class RiftRenderer {
@@ -99,8 +109,12 @@ export class RiftRenderer {
    *  used by the contact-sheet capture so every cell shows the same phase. */
   breathPhase: number | null = null;
   private animFrameId = 0;
-  private startTime = 0;
   private lastTickTime = 0;
+  // Monotonic simulation clock, advanced by the *clamped* per-frame dt. Spawn
+  // accumulation and particle eviction both read this, so they stay in sync
+  // regardless of frame rate — a slow frame slows time uniformly instead of
+  // letting eviction outrun spawning (which drained emitters under low fps).
+  private simTime = 0;
   private destroyed = false;
 
   constructor(options: RiftRendererOptions) {
@@ -130,8 +144,7 @@ export class RiftRenderer {
 
     this.compileLayers();
 
-    this.startTime = performance.now() / 1000;
-    this.lastTickTime = this.startTime;
+    this.lastTickTime = performance.now() / 1000;
     this.tick = this.tick.bind(this);
 
     // Render loop only starts once textures are in. Both flash and partic
@@ -139,14 +152,30 @@ export class RiftRenderer {
     // as solid color (or black, with the fragment discards now in place).
     this.textureLoad = loadTextures(gl, options.texturePath).then((tex) => {
       this.textures = tex;
-      this.startTime = performance.now() / 1000;
-      this.lastTickTime = this.startTime;
+      this.lastTickTime = performance.now() / 1000;
       this.animFrameId = requestAnimationFrame(this.tick);
     });
   }
 
   /** Resolves once the renderer is ready to draw. */
   ready(): Promise<void> { return this.textureLoad; }
+
+  /** Monotonic simulation time in seconds (advances by the clamped per-frame
+   *  dt). Capture tooling polls this to wait for emitters to reach steady
+   *  state independent of the host's frame rate. */
+  get clock(): number { return this.simTime; }
+
+  /** Fast-forward the simulation by `seconds`, ticking every live cache in
+   *  fixed sub-steps WITHOUT drawing. Lets capture tooling warm emitters to
+   *  steady state instantly regardless of host frame rate; not needed for
+   *  normal playback (the raf loop fills them in over time). */
+  advance(seconds: number): void {
+    const step = 1 / 60;
+    for (let t = 0; t < seconds; t += step) {
+      this.simTime += step;
+      for (const cache of this.caches) cache.tick(this.simTime, step);
+    }
+  }
 
   private compileLayers(): void {
     const gl = this.gl;
@@ -162,12 +191,18 @@ export class RiftRenderer {
       partic3: [particVert, particFrag],
       orb:     [particVert, particFrag],
       ring:    [ringVert,   ringFrag],
+      glow:    [ringVert,   ringFrag],
+      flare:   [flareVert,  flareFrag],
     };
 
     for (const kind of LAYER_KINDS) {
       const [vs, fs] = sources[kind];
-      // Same key for the partic family (incl. orb) so they reuse one program.
-      const cacheKey = (kind === 'partic2' || kind === 'partic3' || kind === 'orb') ? 'partic' : kind;
+      // Same key for the partic family (incl. orb) so they reuse one program;
+      // glow reuses the ring program (same procedural-gradient shader).
+      const cacheKey =
+        (kind === 'partic2' || kind === 'partic3' || kind === 'orb') ? 'partic' :
+        kind === 'glow' ? 'ring' :
+        kind;
       const program = getOrCreateProgram(gl, this.programCache, cacheKey, vs, fs);
       const vao = gl.createVertexArray()!;
       gl.bindVertexArray(vao);
@@ -196,11 +231,17 @@ export class RiftRenderer {
   }
 
   createCargoCache(params: CargoCacheParams): CargoCache {
-    const time = performance.now() / 1000 - this.startTime;
-    const cache = new CargoCache(params, time);
+    const cache = new CargoCache(params, this.simTime);
     cache.onFinished = () => { this.caches.delete(cache); };
     this.caches.add(cache);
     return cache;
+  }
+
+  /** Drop a cache immediately, skipping the destroy() teardown animation.
+   *  Used by the tuning harness to re-spawn the grid on every slider change
+   *  without leaving fading ghosts behind. */
+  removeCargoCache(cache: CargoCache): void {
+    this.caches.delete(cache);
   }
 
   destroy(): void {
@@ -228,9 +269,10 @@ export class RiftRenderer {
     if (this.destroyed) return;
 
     const gl = this.gl;
-    const time = now / 1000 - this.startTime;
     const dt = Math.min(0.05, Math.max(0, (now / 1000) - this.lastTickTime));
     this.lastTickTime = now / 1000;
+    this.simTime += dt;
+    const time = this.simTime;
 
     // Resize backing store on devicePixelRatio / layout changes
     const dpr = window.devicePixelRatio || 1;

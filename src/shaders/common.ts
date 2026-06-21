@@ -34,6 +34,7 @@ uniform int u_sizeCurve;                    // CurveShape id — see common.ts
 //   2 = bellMid   [0,0, 0.5,0.5, 1,0]    bellEased(t) * 0.5
 //   3 = rampUp    [0,0, 1,1]             easeInOutSine(t)
 //   4 = rampDown  [0,1, 1,0]             1 - easeInOutSine(t)
+//   5 = hold      constant 1.0          static layers (no size/alpha change)
 export const CURVE_HELPERS = `
 const float PI = 3.14159265359;
 // Per-shader emissive scales push additive HDR accumulation above 1.0 so
@@ -57,11 +58,20 @@ float evalCurve(int id, float t) {
   if (id == 1) return bellEased(t) * 0.2;
   if (id == 2) return bellEased(t) * 0.5;
   if (id == 3) return easeInOutSine(t);
+  if (id == 5) return 1.0;         // hold — constant, static layers
   return 1.0 - easeInOutSine(t);   // id == 4 (rampDown), or fallback
 }
 // Legacy alias — kept so existing shader source that referenced bell(t) still
 // compiles during the curve-plumbing migration.
 float bell(float t) { return bellEased(t); }
+// "Lit by the star": the whole drop brightens and dims with the star's breath
+// so the star reads as the single light source for every layer. phase is the
+// star's u_breathPhase (n = 0.5 + 0.5*sin(phase), 0..1 over the pulse); each
+// layer maps it into its own lo..hi brightness swing. Keeping the formula here
+// guarantees every layer pulses in lockstep with the star.
+float breathLight(float phase, float lo, float hi) {
+  return mix(lo, hi, 0.5 + 0.5 * sin(phase));
+}
 `;
 
 // `destroyTime > 0` means the user requested teardown at that timestamp; we
