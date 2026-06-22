@@ -23,11 +23,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Eluvade/rift-echoes.git"
+    "url": "git+https://github.com/Eluvade/rift-echoes.git"
   },
   "homepage": "https://github.com/Eluvade/rift-echoes",
   "devDependencies": {
+    "gifenc": "^1.0.3",
     "playwright": "^1.60.0",
+    "pngjs": "^7.0.0",
     "typescript": "^5.4.0"
   }
 }
