@@ -1,6 +1,6 @@
 {
   "name": "@eluvade/rift-echoes",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Lightweight WebGL module for rendering interactive loot drops with rarity-based visuals.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
