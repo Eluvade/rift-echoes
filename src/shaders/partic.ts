@@ -85,9 +85,11 @@ void main() {
   // add a soft, bright radial core. Through the HDR + bloom pass that hot centre
   // blooms into a small halo, so every particle casts light into the drop rather
   // than being a flat sprite. pow(1 - r, 3) keeps it a compact glow that decays
-  // before the quad edge (no rectangle).
+  // before the quad edge (no rectangle). Gated by tex.a so the core tracks the
+  // actual sprite shape — without it, a non-round sprite (T_Cell_1 dots, T_Loot
+  // burst) would get a stray radial disc bleeding through that ignores the art.
   float body = tex.a * radialMask;
-  float lightCore = pow(max(0.0, 1.0 - r), 3.0);
+  float lightCore = pow(max(0.0, 1.0 - r), 3.0) * tex.a;
   float lum = body + lightCore * 0.7;
 
   // alpha_over_life: per-layer curve. The Niagara loot-drop graphs use three
