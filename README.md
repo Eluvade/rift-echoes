@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://abyssalrift.eluvade.com/">
-    <img alt="Rift Echoes — Unique-tier cargo cache" title="Rift Echoes" src="./examples/unique.png" width="560"/>
+    <img alt="Rift Echoes — Unique-tier cargo cache" title="Rift Echoes" src="./examples/unique.gif" width="560"/>
   </a>
 </p>
 
@@ -14,8 +14,9 @@
 </div>
 
 <p align="center">
-  <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg">
-  <img alt="npm" src="https://img.shields.io/npm/v/@eluvade/rift-echoes">
+  <a href="https://www.npmjs.com/package/@eluvade/rift-echoes"><img alt="npm version" src="https://img.shields.io/npm/v/@eluvade/rift-echoes"></a>
+  <a href="https://www.npmjs.com/package/@eluvade/rift-echoes"><img alt="TypeScript types included" src="https://img.shields.io/npm/types/@eluvade/rift-echoes"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
 Rift Echoes renders animated, rarity-tiered loot-drop effects ("cargo caches")
@@ -27,7 +28,7 @@ with bloom and ACES tonemapping.
 Built for [Abyssal Rift](https://abyssalrift.eluvade.com) — a 2D space
 exploration MMORPG.
 
-**[Live Demo](https://eluvade.github.io/rift-echoes/examples/?rarity=Unique)**
+**[▶ Live demo](https://eluvade.github.io/rift-echoes/examples/)** &nbsp;·&nbsp; **[Layer × rarity grid](https://eluvade.github.io/rift-echoes/examples/grid.html)** &nbsp;·&nbsp; **[npm](https://www.npmjs.com/package/@eluvade/rift-echoes)**
 
 <p align="center">
   <img alt="Layer × rarity grid — every layer isolated against every tier" title="Layer × rarity breakdown" src="./examples/rarity-grid.png" width="900"/>
@@ -47,6 +48,36 @@ exploration MMORPG.
 ```sh
 npm install @eluvade/rift-echoes
 ```
+
+### Without a build step (CDN)
+
+The package is a native ES module with zero dependencies, so you can import it
+straight from a CDN inside a plain `<script type="module">` — no bundler, no
+package manager, just an HTML file:
+
+```html
+<script type="module">
+  import { RiftRenderer, Rarity } from 'https://esm.sh/@eluvade/rift-echoes@1.0.0';
+
+  // Omit `canvas` and a full-screen one is created and appended for you.
+  // Missing textures fall back to procedural ones, so this renders as-is.
+  const renderer = new RiftRenderer({ texturePath: '/textures/' });
+  await renderer.ready();
+
+  const dpr = window.devicePixelRatio || 1;
+  renderer.createCargoCache({
+    rarity: Rarity.Unique,
+    x: (innerWidth / 2) * dpr,   // createCargoCache uses device pixels
+    y: (innerHeight / 2) * dpr,
+    size: 1.5,
+  });
+</script>
+```
+
+[esm.sh](https://esm.sh) is used above; [jsDelivr](https://www.jsdelivr.com)
+(`https://cdn.jsdelivr.net/npm/@eluvade/rift-echoes@1.0.0/+esm`) and
+[unpkg](https://unpkg.com) (`https://unpkg.com/@eluvade/rift-echoes@1.0.0`) serve
+the same module. Pin `@1.0.0` for reproducibility, or drop it to track latest.
 
 ## Usage
 
@@ -111,6 +142,23 @@ T_Light_Ring.PNG       T_Cell_1.PNG     T_SPHERE_texture.PNG
 > assets** (Gabriel Aguiar — *Unique Loot Drops*) and are **not** redistributed
 > with this package. Supply your own equivalent set at `texturePath`.
 
+## Examples
+
+Two live harnesses live under `examples/` and are deployed to GitHub Pages:
+
+- **[Single-drop tuning harness](https://eluvade.github.io/rift-echoes/examples/)**
+  — `examples/index.html`. Spawn one drop and tune it live: pick the rarity,
+  toggle individual layers, override a layer's DMP, and respawn / destroy. URL
+  params: `?rarity=<Rarity>`, `?layers=<i,j>`, `?dmp=<a,b,c,d>`,
+  `?freeze=<radians>`. Exposes `window.riftRenderer` / `window.riftCache`.
+- **[Layer × rarity grid](https://eluvade.github.io/rift-echoes/examples/grid.html)**
+  — `examples/grid.html`. Every layer isolated against every rarity tier in one
+  canvas, with per-row sliders to tune each layer.
+
+To run them locally: `npm run build`, then serve the repo root with any static
+server (e.g. `npx serve .`) and open `examples/index.html` or
+`examples/grid.html`.
+
 ## Development
 
 ```sh
@@ -118,10 +166,6 @@ npm run build                     # tsc → dist/
 node scripts/shoot.mjs <label> <Rarity> [layers]   # single headless screenshot
 node scripts/contact.mjs <label>  # per-layer × per-rarity contact sheet (PNG)
 ```
-
-`examples/index.html` is a single-drop tuning harness (rarity / layer / DMP
-controls). `examples/grid.html` renders the full layer × rarity table live in one
-view. Both are served from the repo root.
 
 ## License
 
