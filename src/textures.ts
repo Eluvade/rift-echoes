@@ -29,19 +29,58 @@ const TEXTURE_FILES = {
   sphere: 'T_SPHERE_texture.PNG',
 } as const;
 
-function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
+// Soft round emissive blob — the shape of T_glow_2 and a fine stand-in for any
+// of the sprite textures. Used as the procedural fallback so the published demo
+// renders even though the commercial reference/ textures aren't redistributed.
+function makeGlowCanvas(size = 128): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d')!;
+  const r = size / 2;
+  const g = ctx.createRadialGradient(r, r, 0, r, r, r);
+  g.addColorStop(0.0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.5, 'rgba(255,255,255,0.45)');
+  g.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  return c;
+}
+
+// Tiling grey value-noise — the REPEAT-wrapped T_NOISE fallback (unused by the
+// current procedural recipes, but kept seam-tolerant just in case).
+function makeNoiseCanvas(size = 128): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = (Math.random() * 255) | 0;
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+    img.data[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+
+// Resolve with the loaded image, or — if it 404s / errors — a procedural
+// fallback, so a missing texture set degrades gracefully instead of rejecting
+// the whole renderer (which would leave the demo a blank canvas).
+function loadImage(src: string, fallback: () => TexImageSource): Promise<TexImageSource> {
+  return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error(`Failed to load ${src}`));
+    img.onerror = () => {
+      console.warn(`[rift-echoes] texture ${src} failed to load — using procedural fallback`);
+      resolve(fallback());
+    };
     img.src = src;
   });
 }
 
 function uploadTexture(
   gl: WebGL2RenderingContext,
-  img: HTMLImageElement,
+  img: TexImageSource,
   wrap: number,
 ): WebGLTexture {
   const tex = gl.createTexture()!;
@@ -61,12 +100,12 @@ export async function loadTextures(
 ): Promise<TextureSet> {
   const base = basePath.endsWith('/') ? basePath : basePath + '/';
   const [noiseImg, ringImg, glow2Img, cell1Img, lootImg, sphereImg] = await Promise.all([
-    loadImage(base + TEXTURE_FILES.noise),
-    loadImage(base + TEXTURE_FILES.lightRing),
-    loadImage(base + TEXTURE_FILES.glow2),
-    loadImage(base + TEXTURE_FILES.cell1),
-    loadImage(base + TEXTURE_FILES.loot),
-    loadImage(base + TEXTURE_FILES.sphere),
+    loadImage(base + TEXTURE_FILES.noise, makeNoiseCanvas),
+    loadImage(base + TEXTURE_FILES.lightRing, makeGlowCanvas),
+    loadImage(base + TEXTURE_FILES.glow2, makeGlowCanvas),
+    loadImage(base + TEXTURE_FILES.cell1, makeGlowCanvas),
+    loadImage(base + TEXTURE_FILES.loot, makeGlowCanvas),
+    loadImage(base + TEXTURE_FILES.sphere, makeGlowCanvas),
   ]);
   return {
     // T_NOISE is a tiling cloud — REPEAT wrap so the polar UV pan never seams.

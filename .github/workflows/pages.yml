@@ -35,6 +35,8 @@ jobs:
           mkdir -p _site/dist _site/examples
           cp -r dist/* _site/dist/
           cp -r examples/* _site/examples/
+          # Root landing → redirect to the demo (avoids a 404 at the site root).
+          printf '<!doctype html><meta http-equiv="refresh" content="0; url=examples/">\n' > _site/index.html
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
