@@ -27,7 +27,7 @@ with bloom and ACES tonemapping.
 Built for [Abyssal Rift](https://abyssalrift.eluvade.com) — a 2D space
 exploration MMORPG.
 
-**[Live Demo](https://eluvade.github.io/rift-echoes/examples/)**
+**[Live Demo](https://eluvade.github.io/rift-echoes/examples/?rarity=Unique)**
 
 <p align="center">
   <img alt="Layer × rarity grid — every layer isolated against every tier" title="Layer × rarity breakdown" src="./examples/rarity-grid.png" width="900"/>

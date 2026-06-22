@@ -113,7 +113,7 @@
         <button class="respawn-btn" id="respawn">Respawn / destroy()</button>
     </div>
     <div class="row hint">
-        URL: <code id="urlEcho">?rarity=Uncommon</code>
+        URL: <code id="urlEcho">?rarity=Unique</code>
     </div>
 </div>
 <script type="module">
@@ -122,11 +122,11 @@
     // ─── URL state ────────────────────────────────────────────────────────
     const url = new URL(window.location.href);
     const params = url.searchParams;
-    const rarityName = params.get('rarity') ?? 'Uncommon';
+    const rarityName = params.get('rarity') ?? 'Unique';
     const layersParam = params.get('layers');
     const dmpParam = params.get('dmp');
 
-    const rarity = Rarity[rarityName] ?? Rarity.Uncommon;
+    const rarity = Rarity[rarityName] ?? Rarity.Unique;
     const config = RARITY_CONFIGS[rarity];
 
     const parseLayers = (s) => s
