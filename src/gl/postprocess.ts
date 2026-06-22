@@ -54,10 +54,11 @@ void main() {
   fragColor = vec4(c, 1.0);
 }`;
 
-// Composite + tonemap. Reinhard mapping `x / (x + 1)` keeps the cargo cache
-// readable even when emissive values stack well above 1.0. Output alpha is
-// the tonemapped luminance so the canvas blends correctly on any backdrop
-// (matches the renderer's `alpha: true, premultipliedAlpha: false` config).
+// Composite + tonemap. An ACES filmic curve (Narkowicz fit, see aces() below)
+// keeps the cargo cache readable when emissive values stack well above 1.0
+// while holding saturation through the highlight rolloff. Output alpha is the
+// tonemapped luminance so the canvas blends correctly on any backdrop (matches
+// the renderer's `alpha: true, premultipliedAlpha: false` config).
 const COMPOSITE_FRAG = `#version 300 es
 precision highp float;
 uniform sampler2D u_scene;
