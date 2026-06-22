@@ -79,6 +79,14 @@ export interface EmitterConfig {
 
 const STRIDE = 13;
 
+/** Period (seconds) the monotonic sim clock is wrapped into before any time
+ *  value reaches a shader. The clock grows without bound; wrapping birthTime,
+ *  destroyTime and u_time into [0, TIME_WRAP) keeps shader-side float precision
+ *  high (see the matching `TIME_WRAP` const in shaders/common.ts — keep in sync).
+ *  Must exceed the longest particle lifetime and destroy animation by a wide
+ *  margin; 1 hour gives ~0.2 ms float granularity at the top of the range. */
+export const TIME_WRAP = 3600;
+
 const sampleLifetime = (spec: LifetimeSpec): number =>
   typeof spec === 'number' ? spec : spec[0] + Math.random() * (spec[1] - spec[0]);
 
@@ -282,6 +290,10 @@ export class Emitter {
     color: readonly [number, number, number],
     destroyTime: number,
   ): number {
+    // Wrap absolute times into [0, TIME_WRAP) so the shader's age/destroy math
+    // stays precise over long sessions; u_time is wrapped to match (see
+    // RiftRenderer). destroyTime 0 = "not destroying" — keep that sentinel.
+    const wrappedDestroy = destroyTime > 0 ? destroyTime % TIME_WRAP : 0;
     let dst = floatOffset;
     for (let i = 0; i < this.count; i++) {
       const src = i * STRIDE;
@@ -289,14 +301,14 @@ export class Emitter {
       out[dst + 1]  = cacheY + this.pool[src + 1];
       out[dst + 2]  = this.pool[src + 4];
       out[dst + 3]  = this.pool[src + 5];
-      out[dst + 4]  = this.pool[src + 6];
+      out[dst + 4]  = this.pool[src + 6] % TIME_WRAP;   // birthTime, wrapped
       out[dst + 5]  = this.pool[src + 7];
       out[dst + 6]  = this.pool[src + 8];
       out[dst + 7]  = color[0];
       out[dst + 8]  = color[1];
       out[dst + 9]  = color[2];
       out[dst + 10] = 1.0;
-      out[dst + 11] = destroyTime;
+      out[dst + 11] = wrappedDestroy;
       dst += 12;
     }
     return this.count;

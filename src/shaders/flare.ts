@@ -18,7 +18,7 @@ out float v_t;
 ${VERTEX_TRANSFORM}
 
 void main() {
-  float age = u_time - a_birthTime;
+  float age = elapsed(u_time, a_birthTime);
   float t = clamp(age / a_lifetime, 0.0, 1.0);
 
   float sizeT = evalCurve(u_sizeCurve, t);
@@ -46,7 +46,12 @@ in vec4 v_color;
 in float v_t;
 out vec4 fragColor;
 
-// Value noise + fbm — standard Book of Shaders construction.
+// Value noise + fbm — standard Book of Shaders construction. The fract(sin(...))
+// hash is precision-sensitive for large arguments, but the bounded clock (M1:
+// u_time wrapped to [0, TIME_WRAP)) keeps the noise coordinate — and thus the
+// sin() argument — bounded, so it stays stable over a long session. (An
+// integer-bit hash was tried for extra portability but rendered low-contrast
+// under SwiftShader and washed the tongues out; reverted.)
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
 float vnoise(vec2 p) {
   vec2 i = floor(p), f = fract(p);

@@ -37,6 +37,20 @@ uniform int u_sizeCurve;                    // CurveShape id — see common.ts
 //   5 = hold      constant 1.0          static layers (no size/alpha change)
 export const CURVE_HELPERS = `
 const float PI = 3.14159265359;
+// Bounded clock. The JS sim clock grows without limit, so every time fed to a
+// shader (u_time, a_birthTime, a_destroyTime) is wrapped CPU-side into
+// [0, TIME_WRAP) before upload — keep this in sync with TIME_WRAP in Emitter.ts.
+// Wrapping keeps sin()/fbm arguments and age subtractions small, avoiding the
+// float precision decay (stuttering breath, quantised motion) that absolute
+// seconds hit once a session has been open for hours.
+const float TIME_WRAP = 3600.0;
+// Elapsed time across the wrap: now and start are both in [0, TIME_WRAP), so a
+// start that sits just "ahead" of now (right after a wrap) still yields a small
+// positive age. Valid while the true elapsed time stays below TIME_WRAP.
+float elapsed(float now, float start) {
+  float d = now - start;
+  return d < 0.0 ? d + TIME_WRAP : d;
+}
 // Per-shader emissive scales push additive HDR accumulation above 1.0 so
 // the bloom + tonemap pass produces saturated cores and wide soft halos.
 // Different materials need different scales to balance: M_Partic is the
@@ -80,14 +94,14 @@ float breathLight(float phase, float lo, float hi) {
 export const DESTROY_FUNCTIONS = `
 vec2 getDestroyOffset(float destroyTime, float time) {
   if (destroyTime <= 0.0) return vec2(0.0);
-  float dt = time - destroyTime;
+  float dt = elapsed(time, destroyTime);
   if (dt < 0.3) return vec2(sin(dt * 60.0) * 3.0, cos(dt * 47.0) * 3.0);
   return vec2(0.0);
 }
 
 float getDestroyScale(float destroyTime, float time) {
   if (destroyTime <= 0.0) return 1.0;
-  float dt = time - destroyTime;
+  float dt = elapsed(time, destroyTime);
   if (dt < 0.3) return 1.0;
   if (dt < 0.5) return 1.0 + (dt - 0.3) * 0.5;
   if (dt < 0.7) return max(0.0, 1.1 - (dt - 0.5) * 5.5);
@@ -105,6 +119,7 @@ vec4 buildClipPosition(float rotation, float scale, vec2 destroyOffset) {
   vec2 rotated = vec2(corner.x * c - corner.y * s, corner.x * s + corner.y * c);
   vec2 worldPx = a_position + rotated + destroyOffset;
   vec2 ndc = (worldPx / u_resolution) * 2.0 - 1.0;
+  // Negate Y: pixel space is top-left origin (Y down), clip space is Y up.
   return vec4(ndc.x, -ndc.y, 0.0, 1.0);
 }
 `;

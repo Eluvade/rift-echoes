@@ -1,5 +1,6 @@
 import { CargoCacheParams, RiftRendererOptions, LayerKind, CurveShape } from './types.js';
 import { CargoCache } from './CargoCache.js';
+import { TIME_WRAP } from './Emitter.js';
 import { getOrCreateProgram } from './gl/programCache.js';
 import {
   createQuadBuffer,
@@ -32,6 +33,11 @@ interface LayerProgram {
   };
 }
 
+// The current rarity recipes use only 'glow', 'ring', 'flare', 'star', 'partic'.
+// 'sphere', 'flash', 'partic2', 'partic3', 'orb' are retained as opt-in kinds
+// for API consumers who fork RARITY_CONFIGS; they compile a program (and, for
+// the textured ones, load a sprite) at startup even when no recipe emits them.
+// Prune them here and from LayerKind if the bundle/startup cost ever matters.
 const LAYER_KINDS: LayerKind[] = ['sphere', 'star', 'flash', 'partic', 'partic2', 'partic3', 'orb', 'ring', 'glow', 'flare'];
 
 // Default DMP[0] when a layer config omits one. Numbers come straight from
@@ -399,14 +405,20 @@ export class RiftRenderer {
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.instanceData, 0, total * FLOATS_PER_INSTANCE);
 
     gl.useProgram(layer.program);
-    gl.uniform1f(layer.uniforms.u_time, time);
+    // Wrap the clock into [0, TIME_WRAP) to match the wrapped birthTime/
+    // destroyTime packed per instance (keeps shader-side float precision high
+    // over long sessions — see TIME_WRAP in Emitter.ts).
+    gl.uniform1f(layer.uniforms.u_time, time % TIME_WRAP);
     gl.uniform2f(layer.uniforms.u_resolution, w, h);
     gl.uniform1f(layer.uniforms.u_rotationRate, bucket.rotationRate);
     gl.uniform4f(layer.uniforms.u_dmp, bucket.dmp[0], bucket.dmp[1], bucket.dmp[2], bucket.dmp[3]);
     if (layer.uniforms.u_sizeCurve)  gl.uniform1i(layer.uniforms.u_sizeCurve,  bucket.sizeCurve);
     if (layer.uniforms.u_alphaCurve) gl.uniform1i(layer.uniforms.u_alphaCurve, bucket.alphaCurve);
     if (layer.uniforms.u_breathPhase) {
-      gl.uniform1f(layer.uniforms.u_breathPhase, this.breathPhase ?? time * 1.25);
+      // Pre-wrap the breath phase to [0, 2π): sin() of an unbounded argument
+      // loses precision and the pulse visibly stutters after hours of uptime.
+      const phase = this.breathPhase ?? (time * 1.25) % (2 * Math.PI);
+      gl.uniform1f(layer.uniforms.u_breathPhase, phase);
     }
 
     if (bucket.kind === 'flash' && this.textures) {

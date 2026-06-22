@@ -35,7 +35,7 @@ out float v_t;
 ${VERTEX_TRANSFORM}
 
 void main() {
-  float age = u_time - a_birthTime;
+  float age = elapsed(u_time, a_birthTime);
   float t = clamp(age / a_lifetime, 0.0, 1.0);
 
   float sizeT = evalCurve(u_sizeCurve, t);
