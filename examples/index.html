@@ -110,7 +110,7 @@
         <div class="hint">comma-separated 4 floats; leave blank for spec value</div>
     </div>
     <div class="row">
-        <button class="respawn-btn" id="respawn">Respawn / destroy()</button>
+        <button class="respawn-btn" id="respawn">Destroy</button>
     </div>
     <div class="row hint">
         URL: <code id="urlEcho">?rarity=Unique</code>
@@ -125,6 +125,8 @@
     const rarityName = params.get('rarity') ?? 'Unique';
     const layersParam = params.get('layers');
     const dmpParam = params.get('dmp');
+    const sizeParam = parseFloat(params.get('size'));   // ?size=<scale> overrides the drop scale (capture tooling)
+    const dropSize = Number.isNaN(sizeParam) ? 1.5 : sizeParam;
 
     const rarity = Rarity[rarityName] ?? Rarity.Unique;
     const config = RARITY_CONFIGS[rarity];
@@ -166,6 +168,17 @@
     const center = () => [window.innerWidth / 2 * dpr(), window.innerHeight / 2 * dpr()];
 
     let cache = null;
+    // Tracks intent so the button is a clean toggle: true = a drop is live and
+    // the next press destroys it; false = nothing live and the next press
+    // respawns. Decoupled from cache.finished so a press during the despawn
+    // animation still flips correctly.
+    let alive = false;
+
+    function setRespawnLabel() {
+        const btn = document.getElementById('respawn');
+        if (btn) btn.textContent = alive ? 'Destroy' : 'Respawn';
+    }
+
     function spawn() {
         if (cache && !cache.finished) cache.destroy();
         const [cx, cy] = center();
@@ -173,10 +186,18 @@
             rarity,
             x: cx,
             y: cy,
-            size: 1.5,  // bigger than default so layer details are visible
+            size: dropSize,  // 1.5 by default; ?size= overrides for capture framing
             layerMask: layerMask ?? undefined,
         });
         window.riftCache = cache;
+        alive = true;
+        setRespawnLabel();
+    }
+
+    function despawn() {
+        if (cache && !cache.finished) cache.destroy();
+        alive = false;
+        setRespawnLabel();
     }
     spawn();
 
@@ -253,7 +274,10 @@
         window.location.href = u.toString();
     });
 
-    respawn.addEventListener('click', spawn);
+    respawn.addEventListener('click', () => {
+        if (alive) despawn();
+        else spawn();
+    });
 
     pushUrl({ layers: layerMask ?? config.layers.map((_, i) => i) });
 
