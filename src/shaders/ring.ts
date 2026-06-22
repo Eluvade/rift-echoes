@@ -55,6 +55,7 @@ void main() {
   float falloffPow = max(u_dmp.w, 0.05);
 
   float g;
+  float breath;
   if (radius > 0.0) {
     // L1 annulus — a soft ring BAND that FRAMES the star. It rises from a fully
     // transparent interior up to the peak at the radius, then fades back out, so
@@ -69,18 +70,22 @@ void main() {
     float outer = pow(1.0 - t, falloffPow);               // soft outward fade
     float contain = 1.0 - smoothstep(0.86, 0.99, r);      // circular safety cap
     g = inner * outer * peak * contain;
+    // The ring does NOT pulse with the star — a ring breathing in lockstep reads
+    // as fake. It is a steady band, only gently lit on its inner face (it already
+    // peaks at the inner edge nearest the star and fades outward), so it reads as
+    // catching the star's light rather than emitting its own.
+    breath = 1.0;
   } else {
     // L0 glow — solid centre fading outward (a contained radial; reaches 0 well
     // inside the quad, so it never clips).
     float t = clamp(r / glow, 0.0, 1.0);
     g = pow(1.0 - t, falloffPow) * peak;
+    // The glow IS the star's own central light, so it breathes with the star.
+    breath = breathLight(u_breathPhase, 0.68, 1.4);
   }
   if (g < 0.002) discard;
 
-  // Lit by the star: the glow/ring brighten and dim as the star breathes, so
-  // the whole drop reads as illuminated by it rather than a flat backdrop.
   const float EMISSIVE = 1.4;
-  float alpha = evalCurve(u_alphaCurve, v_t) * v_color.a * g * EMISSIVE
-              * breathLight(u_breathPhase, 0.68, 1.4);
+  float alpha = evalCurve(u_alphaCurve, v_t) * v_color.a * g * EMISSIVE * breath;
   fragColor = vec4(v_color.rgb, alpha);
 }`;

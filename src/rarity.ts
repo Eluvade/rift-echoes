@@ -17,16 +17,15 @@ import { Rarity, RarityConfig, LayerSpec } from './types.js';
 // circular sharp inline and the outside gradient").
 const HALO_SIZE = 200;   // L0 center gradient (furthest-back soft glow)
 const FLARE_SIZE = 420;  // L2 energy-flare corona (Legendary+)
-// Ring quad must contain the gradient band: it rises around the inner radius
-// (~80px) and fades out over a long tail to the quad edge, so the quad
-// half-extent needs headroom for that tail. Placement within the quad is set
-// by the ring DMP below.
-const RING_SIZE = 820;   // soft annulus band — large enough to FRAME the star core
 
 interface TierShape {
   color: [number, number, number];
   /** Star quad size in px (0 = no star, e.g. Common). Bigger = higher rarity. */
   starSize: number;
+  /** L1 ring quad size in px. Scales (gently) with rarity so the ring frames
+   *  the star proportionally — a constant ring dwarfs the smaller low-tier
+   *  stars and reads as too wide. */
+  ringSize: number;
   /** Horizontal arm reach as a fraction of the quad (vertical reach is fixed
    *  near 1.0). Smaller = more vertically elongated star. */
   starLX: number;
@@ -60,8 +59,8 @@ function makeRarity(t: TierShape): RarityConfig {
       kind: 'ring',
       sizeCurve: 'hold',
       alphaCurve: 'hold',
-      dmp: [0.66, 0.12, 0.26, 0.9],
-      emitter: { spawnRate: 0, burst: 1, lifetime: 1e6, size: { kind: 'fixed', value: RING_SIZE } },
+      dmp: [0.5, 0.07, 0.26, 0.9],
+      emitter: { spawnRate: 0, burst: 1, lifetime: 1e6, size: { kind: 'fixed', value: t.ringSize } },
     },
   ];
 
@@ -140,10 +139,10 @@ function makeRarity(t: TierShape): RarityConfig {
 }
 
 export const RARITY_CONFIGS: Record<Rarity, RarityConfig> = {
-  [Rarity.Common]:    makeRarity({ color: [0.85, 0.85, 0.90], starSize: 0,   starLX: 0.70, particles: 0,  flare: false }),
-  [Rarity.Uncommon]:  makeRarity({ color: [0.25, 0.95, 0.40], starSize: 450, starLX: 0.70, particles: 8,  flare: false }),
-  [Rarity.Rare]:      makeRarity({ color: [0.30, 0.55, 1.00], starSize: 520, starLX: 0.68, particles: 14, flare: false }),
-  [Rarity.Epic]:      makeRarity({ color: [0.75, 0.30, 1.00], starSize: 660, starLX: 0.66, particles: 22, flare: false }),
-  [Rarity.Legendary]: makeRarity({ color: [1.00, 0.50, 0.03], starSize: 800, starLX: 0.64, particles: 32, flare: true  }),
-  [Rarity.Unique]:    makeRarity({ color: [1.00, 0.18, 0.18], starSize: 900, starLX: 0.62, particles: 40, flare: true  }),
+  [Rarity.Common]:    makeRarity({ color: [0.85, 0.85, 0.90], starSize: 0,   ringSize: 560, starLX: 0.70, particles: 0,  flare: false }),
+  [Rarity.Uncommon]:  makeRarity({ color: [0.25, 0.95, 0.40], starSize: 450, ringSize: 620, starLX: 0.70, particles: 8,  flare: false }),
+  [Rarity.Rare]:      makeRarity({ color: [0.30, 0.55, 1.00], starSize: 520, ringSize: 680, starLX: 0.68, particles: 14, flare: false }),
+  [Rarity.Epic]:      makeRarity({ color: [0.75, 0.30, 1.00], starSize: 660, ringSize: 740, starLX: 0.66, particles: 22, flare: false }),
+  [Rarity.Legendary]: makeRarity({ color: [1.00, 0.50, 0.03], starSize: 800, ringSize: 820, starLX: 0.64, particles: 32, flare: true  }),
+  [Rarity.Unique]:    makeRarity({ color: [1.00, 0.18, 0.18], starSize: 900, ringSize: 880, starLX: 0.62, particles: 40, flare: true  }),
 };
