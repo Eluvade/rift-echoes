@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://abyssalrift.eluvade.com/">
-    <img alt="Rift Echoes preview" title="Rift Echoes" src="./preview.gif"/>
+    <img alt="Rift Echoes — Unique-tier cargo cache" title="Rift Echoes" src="./examples/unique.png" width="560"/>
   </a>
 </p>
 
@@ -28,6 +28,10 @@ Built for [Abyssal Rift](https://abyssalrift.eluvade.com) — a 2D space
 exploration MMORPG.
 
 **[Live Demo](https://eluvade.github.io/rift-echoes/examples/)**
+
+<p align="center">
+  <img alt="Layer × rarity grid — every layer isolated against every tier" title="Layer × rarity breakdown" src="./examples/rarity-grid.png" width="900"/>
+</p>
 
 ## Features
 
