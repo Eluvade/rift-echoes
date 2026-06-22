@@ -77,7 +77,10 @@ void main() {
   // not to clip the texture's natural soft falloff in the inner 60%.
   float r = length(v_uv);
   float radialMask = 1.0 - smoothstep(0.6, 1.0, r);
-  if (radialMask <= 0.0) discard;
+  // Zero-output instead of discard: with additive (SRC_ALPHA, ONE) blending an
+  // alpha of 0 contributes nothing, and avoiding discard keeps tiled-GPU
+  // framebuffer fast-paths enabled for the whole draw.
+  if (radialMask <= 0.0) { fragColor = vec4(0.0); return; }
 
   vec3 rgb = v_color.rgb * tex.rgb;
 
@@ -103,7 +106,6 @@ void main() {
   const float EMISSIVE = 6.5;    // partic = the soft body of the orb; bloom does the rest
   float alpha = evalCurve(u_alphaCurve, v_t) * v_color.a * lum * u_dmp.x * EMISSIVE
               * breathLight(u_breathPhase, 0.6, 1.5);
-  if (alpha < 0.001) discard;
 
   // Un-premultiplied RGB so SRC_ALPHA/ONE blend yields rgb*alpha per pixel
   // rather than rgb*alpha² (the blow-out bug from the first Niagara port).

@@ -102,7 +102,9 @@ void main() {
   float core = 1.3 * exp(-r * 18.0);
 
   float intensity = rays + shafts * 0.35 + core;
-  if (intensity < 0.002) discard;
+  // Zero-output rather than discard — additive blend ignores a 0 alpha, and
+  // avoiding discard keeps tiled-GPU fast-paths on for the whole (large) quad.
+  if (intensity < 0.002) { fragColor = vec4(0.0); return; }
 
   // Light output rises as the arms elongate and dims as they contract.
   float breathNorm = clamp((v_breathe - 0.8) / 0.2, 0.0, 1.0);

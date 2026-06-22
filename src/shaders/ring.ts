@@ -83,7 +83,9 @@ void main() {
     // The glow IS the star's own central light, so it breathes with the star.
     breath = breathLight(u_breathPhase, 0.68, 1.4);
   }
-  if (g < 0.002) discard;
+  // Zero-output rather than discard — additive blend ignores a 0 alpha, and
+  // avoiding discard keeps tiled-GPU fast-paths on for the whole (large) quad.
+  if (g < 0.002) { fragColor = vec4(0.0); return; }
 
   const float EMISSIVE = 1.4;
   float alpha = evalCurve(u_alphaCurve, v_t) * v_color.a * g * EMISSIVE * breath;
