@@ -33,26 +33,51 @@ interface LayerProgram {
   };
 }
 
-// The current rarity recipes use only 'glow', 'ring', 'flare', 'star', 'partic'.
-// 'sphere', 'flash', 'partic2', 'partic3', 'orb' are retained as opt-in kinds
-// for API consumers who fork RARITY_CONFIGS; they compile a program (and, for
-// the textured ones, load a sprite) at startup even when no recipe emits them.
-// Prune them here and from LayerKind if the bundle/startup cost ever matters.
-const LAYER_KINDS: LayerKind[] = ['sphere', 'star', 'flash', 'partic', 'partic2', 'partic3', 'orb', 'ring', 'glow', 'flare'];
+// One record is the whole definition of a layer kind: which shader pair draws
+// it, which compiled program it shares, its default DMP[0] and curve shapes,
+// and the sampler/texture it binds (if any). Adding a kind is now a single
+// object literal here plus its entry in the LayerKind union — TypeScript won't
+// compile until every field is supplied, so there is no "edit six tables and
+// hope" ritual and no silent wrong-default. compileLayers() and drawBucket()
+// both iterate this one source instead of cross-referencing parallel maps.
+//
+// `programKey` lets several kinds reuse one compiled program: the partic family
+// (incl. orb) shares the partic shader and differs only by bound texture; glow
+// reuses the ring program (same procedural-gradient shader). `texture` names
+// the sampler uniform and the TextureSet entry to bind for that draw.
+//
+// Defaults (DMP / curves) come straight from each material's HLSL
+// `GetDynamicParameter(...)` and its size_over_life / alpha_over_life graphs.
+//
+// Only 'glow', 'ring', 'flare', 'star', 'partic' appear in the current rarity
+// recipes; 'sphere', 'flash', 'partic2', 'partic3', 'orb' are retained as
+// opt-in kinds for consumers who fork RARITY_CONFIGS. Each still compiles a
+// program (and loads its sprite) at startup even when unused — drop the entry
+// here and from LayerKind if bundle/startup cost ever matters.
+interface LayerKindDef {
+  shaders: [string, string];   // [vertex, fragment] source
+  programKey: string;          // shared program identity (partic family, glow→ring)
+  dmp: [number, number, number, number];
+  sizeCurve: CurveShape;
+  alphaCurve: CurveShape;
+  texture?: { sampler: 'u_noiseTex' | 'u_particTex'; key: keyof TextureSet };
+}
 
-// Default DMP[0] when a layer config omits one. Numbers come straight from
-// each material's HLSL `GetDynamicParameter(..., MaterialFloat4(...), 0)`.
-const DEFAULT_DMP: Record<LayerKind, [number, number, number, number]> = {
-  sphere:  [0.5, 0.2, 1.0, 1.0],
-  star:    [1.0, 1.0, 1.0, 1.0],
-  flash:   [5.0, 0.05, 2.0, 0.05],
-  partic:  [1.0, 1.0, 1.0, 1.0],
-  partic2: [1.0, 1.0, 1.0, 1.0],
-  partic3: [1.0, 1.0, 1.0, 1.0],
-  orb:     [1.0, 1.0, 1.0, 1.0],
-  ring:    [0.45, 0.75, 0.5, 0.8],   // x = inner radius, y = peak, z = reach, w = falloff exp
-  glow:    [0.0, 0.6, 0.7, 0.8],     // L0 center gradient (radius 0 = solid-centered)
-  flare:   [7.0, 0.5, 0.95, 1.0],    // x = tongue freq, y = drift speed, z = reach, w = intensity
+const LAYER_KINDS: Record<LayerKind, LayerKindDef> = {
+  sphere:  { shaders: [sphereVert, sphereFrag], programKey: 'sphere', dmp: [0.5, 0.2, 1.0, 1.0],  sizeCurve: 'bell',   alphaCurve: 'rampDown' },
+  star:    { shaders: [starVert,   starFrag],   programKey: 'star',   dmp: [1.0, 1.0, 1.0, 1.0],   sizeCurve: 'bell',   alphaCurve: 'bellLow' },
+  flash:   { shaders: [flashVert,  flashFrag],  programKey: 'flash',  dmp: [5.0, 0.05, 2.0, 0.05], sizeCurve: 'rampUp', alphaCurve: 'bellLow', texture: { sampler: 'u_noiseTex',  key: 'noise' } },
+  partic:  { shaders: [particVert, particFrag], programKey: 'partic', dmp: [1.0, 1.0, 1.0, 1.0],   sizeCurve: 'bell',   alphaCurve: 'bellLow', texture: { sampler: 'u_particTex', key: 'glow2' } },
+  partic2: { shaders: [particVert, particFrag], programKey: 'partic', dmp: [1.0, 1.0, 1.0, 1.0],   sizeCurve: 'bell',   alphaCurve: 'bellLow', texture: { sampler: 'u_particTex', key: 'cell1' } },
+  partic3: { shaders: [particVert, particFrag], programKey: 'partic', dmp: [1.0, 1.0, 1.0, 1.0],   sizeCurve: 'bell',   alphaCurve: 'bellLow', texture: { sampler: 'u_particTex', key: 'loot' } },
+  // Body holds full size across its life (overlapping instances average to a
+  // steady orb) rather than pulsing like a bell.
+  orb:     { shaders: [particVert, particFrag], programKey: 'partic', dmp: [1.0, 1.0, 1.0, 1.0],   sizeCurve: 'rampUp', alphaCurve: 'bell',    texture: { sampler: 'u_particTex', key: 'sphere' } },
+  // The ring / glow are single static `burst` instances — they hold their
+  // size/alpha rather than ramping, so each reads as one steady circle.
+  ring:    { shaders: [ringVert,   ringFrag],   programKey: 'ring',   dmp: [0.45, 0.75, 0.5, 0.8], sizeCurve: 'hold',   alphaCurve: 'hold' },   // x=inner radius, y=peak, z=reach, w=falloff exp
+  glow:    { shaders: [ringVert,   ringFrag],   programKey: 'ring',   dmp: [0.0, 0.6, 0.7, 0.8],   sizeCurve: 'hold',   alphaCurve: 'hold' },   // L0 center gradient (radius 0 = solid-centered)
+  flare:   { shaders: [flareVert,  flareFrag],  programKey: 'flare',  dmp: [7.0, 0.5, 0.95, 1.0],  sizeCurve: 'hold',   alphaCurve: 'hold' },   // x=tongue freq, y=drift speed, z=reach, w=intensity
 };
 
 // Curve enum mapping must match evalCurve() in src/shaders/common.ts.
@@ -63,37 +88,6 @@ const CURVE_ID: Record<CurveShape, number> = {
   rampUp:   3,
   rampDown: 4,
   hold:     5,
-};
-
-// Per-kind defaults so layer specs that don't override curves still match
-// the most common Niagara shape for that material.
-const DEFAULT_SIZE_CURVE: Record<LayerKind, CurveShape> = {
-  sphere:  'bell',
-  star:    'bell',
-  flash:   'rampUp',
-  partic:  'bell',
-  partic2: 'bell',
-  partic3: 'bell',
-  // Body holds full size across its life (overlapping instances average to a
-  // steady orb) rather than pulsing like a bell.
-  orb:     'rampUp',
-  // The ring is a single static `burst` instance — it holds its size/alpha
-  // rather than ramping, so it reads as one steady circle.
-  ring:    'hold',
-  glow:    'hold',
-  flare:   'hold',
-};
-const DEFAULT_ALPHA_CURVE: Record<LayerKind, CurveShape> = {
-  sphere:  'rampDown',
-  star:    'bellLow',
-  flash:   'bellLow',
-  partic:  'bellLow',
-  partic2: 'bellLow',
-  partic3: 'bellLow',
-  orb:     'bell',
-  ring:    'hold',
-  glow:    'hold',
-  flare:   'hold',
 };
 
 export class RiftRenderer {
@@ -185,31 +179,14 @@ export class RiftRenderer {
 
   private compileLayers(): void {
     const gl = this.gl;
-    // partic / partic2 / partic3 share the same shader source — only the
-    // sampler binding differs per draw. Keying by source identity lets the
-    // program cache skip three near-identical compiles.
-    const sources: Record<LayerKind, [string, string]> = {
-      sphere:  [sphereVert, sphereFrag],
-      star:    [starVert,   starFrag],
-      flash:   [flashVert,  flashFrag],
-      partic:  [particVert, particFrag],
-      partic2: [particVert, particFrag],
-      partic3: [particVert, particFrag],
-      orb:     [particVert, particFrag],
-      ring:    [ringVert,   ringFrag],
-      glow:    [ringVert,   ringFrag],
-      flare:   [flareVert,  flareFrag],
-    };
 
-    for (const kind of LAYER_KINDS) {
-      const [vs, fs] = sources[kind];
-      // Same key for the partic family (incl. orb) so they reuse one program;
-      // glow reuses the ring program (same procedural-gradient shader).
-      const cacheKey =
-        (kind === 'partic2' || kind === 'partic3' || kind === 'orb') ? 'partic' :
-        kind === 'glow' ? 'ring' :
-        kind;
-      const program = getOrCreateProgram(gl, this.programCache, cacheKey, vs, fs);
+    for (const kind of Object.keys(LAYER_KINDS) as LayerKind[]) {
+      // The partic family (incl. orb) shares one program — only the bound
+      // sampler differs per draw — and glow reuses the ring program; programKey
+      // keys the program cache so those near-identical compiles are skipped.
+      const def = LAYER_KINDS[kind];
+      const [vs, fs] = def.shaders;
+      const program = getOrCreateProgram(gl, this.programCache, def.programKey, vs, fs);
       const vao = gl.createVertexArray()!;
       gl.bindVertexArray(vao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
@@ -340,10 +317,11 @@ export class RiftRenderer {
       for (let i = 0; i < cache.layers.length; i++) {
         const l = cache.layers[i];
         if (l.emitter.liveCount === 0) continue;
-        const dmp = l.spec.dmp ?? DEFAULT_DMP[l.spec.kind];
+        const def = LAYER_KINDS[l.spec.kind];
+        const dmp = l.spec.dmp ?? def.dmp;
         const rotationRate = l.emitter.rotationRate;
-        const sizeCurve = CURVE_ID[l.spec.sizeCurve ?? DEFAULT_SIZE_CURVE[l.spec.kind]];
-        const alphaCurve = CURVE_ID[l.spec.alphaCurve ?? DEFAULT_ALPHA_CURVE[l.spec.kind]];
+        const sizeCurve = CURVE_ID[l.spec.sizeCurve ?? def.sizeCurve];
+        const alphaCurve = CURVE_ID[l.spec.alphaCurve ?? def.alphaCurve];
         const key = `${l.spec.kind}|${rotationRate}|${dmp.join(',')}|${sizeCurve}|${alphaCurve}`;
         let idx = bucketIndex.get(key);
         if (idx == null) {
@@ -421,24 +399,14 @@ export class RiftRenderer {
       gl.uniform1f(layer.uniforms.u_breathPhase, phase);
     }
 
-    if (bucket.kind === 'flash' && this.textures) {
+    // Sampler binding is data on the kind def: flash → T_NOISE on u_noiseTex;
+    // the partic family / orb → their Texture2D_0 sprite on u_particTex
+    // (glow2 / cell1 / loot / sphere). Kinds with no `texture` bind nothing.
+    const tex = LAYER_KINDS[bucket.kind].texture;
+    if (tex && this.textures) {
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, this.textures.noise);
-      gl.uniform1i(layer.uniforms.u_noiseTex!, 0);
-    } else if ((bucket.kind.startsWith('partic') || bucket.kind === 'orb') && this.textures) {
-      // Texture2D_0 binding by material:
-      //   M_Partic   → T_glow_2
-      //   M_Partic_2 → T_Cell_1
-      //   M_Partic_3 → T_Loot
-      //   orb        → T_SPHERE_texture (the glass-ball body)
-      const tex =
-        bucket.kind === 'partic2' ? this.textures.cell1 :
-        bucket.kind === 'partic3' ? this.textures.loot :
-        bucket.kind === 'orb'     ? this.textures.sphere :
-        this.textures.glow2;
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.uniform1i(layer.uniforms.u_particTex!, 0);
+      gl.bindTexture(gl.TEXTURE_2D, this.textures[tex.key]);
+      gl.uniform1i(layer.uniforms[tex.sampler]!, 0);
     }
 
     gl.bindVertexArray(layer.vao);
