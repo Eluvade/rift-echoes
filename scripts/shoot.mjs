@@ -1,7 +1,7 @@
 // Screenshot harness for the loot-drop demo. Builds nothing — run `npm run
 // build` first. Serves the repo root over HTTP (so examples/index.html can
-// import ../dist/index.js and load ../reference/*.PNG), launches headless
-// Chromium with SwiftShader WebGL, and captures each rarity at steady state.
+// import ../dist/index.js), launches headless Chromium with SwiftShader WebGL,
+// and captures each rarity at steady state.
 //
 // Usage:
 //   node scripts/shoot.mjs                 → captures/<rarity>.png (all six)

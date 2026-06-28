@@ -230,7 +230,7 @@
     const cellOverride = parseFloat(params.get('cell') ?? '');
 
     // ── Renderer ────────────────────────────────────────────────────────────
-    const renderer = new RiftRenderer({ texturePath: '../reference/' });
+    const renderer = new RiftRenderer();
     if (freezeParam != null && freezeParam !== '') {
         const f = parseFloat(freezeParam);
         if (!Number.isNaN(f)) {

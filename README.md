@@ -60,8 +60,8 @@ package manager, just an HTML file:
   import { RiftRenderer, Rarity } from 'https://esm.sh/@eluvade/rift-echoes@1.0.0';
 
   // Omit `canvas` and a full-screen one is created and appended for you.
-  // Missing textures fall back to procedural ones, so this renders as-is.
-  const renderer = new RiftRenderer({ texturePath: '/textures/' });
+  // All textures are generated procedurally — nothing is fetched.
+  const renderer = new RiftRenderer();
   await renderer.ready();
 
   const dpr = window.devicePixelRatio || 1;
@@ -85,9 +85,9 @@ the same module. Pin `@1.0.0` for reproducibility, or drop it to track latest.
 import { RiftRenderer, Rarity } from '@eluvade/rift-echoes';
 
 // Pass your own canvas, or omit it to have one appended full-screen.
-const renderer = new RiftRenderer({ texturePath: '/textures/' });
+const renderer = new RiftRenderer();
 
-// Textures load asynchronously; wait before spawning.
+// Renderer init is async (GL setup); wait before spawning.
 await renderer.ready();
 
 const drop = renderer.createCargoCache({
@@ -105,9 +105,10 @@ drop.destroy();
 
 ### `new RiftRenderer(options)`
 
+`new RiftRenderer()` works with no arguments; the only option is optional.
+
 | option        | type                | description                                                        |
 | ------------- | ------------------- | ------------------------------------------------------------------ |
-| `texturePath` | `string`            | Folder (served URL) holding the sprite atlas — see **Textures**.   |
 | `canvas`      | `HTMLCanvasElement` | Optional. If omitted, a full-screen canvas is created and appended. |
 
 - `renderer.ready(): Promise<void>` — resolves once textures are loaded and the
@@ -128,19 +129,6 @@ drop.destroy();
 recipe for each tier (colour + ordered emitter layers) if you want to inspect or
 fork the visual definitions.
 
-## Textures
-
-The materials sample a small sprite set, loaded from `texturePath` at startup.
-The following files must all be present (PNG, power-of-two recommended):
-
-```
-T_NOISE.PNG            T_glow_2.PNG     T_Loot.PNG
-T_Light_Ring.PNG       T_Cell_1.PNG     T_SPHERE_texture.PNG
-```
-
-> The textures under `reference/` used during development are **commercial
-> assets** (Gabriel Aguiar — *Unique Loot Drops*) and are **not** redistributed
-> with this package. Supply your own equivalent set at `texturePath`.
 
 ## Examples
 
