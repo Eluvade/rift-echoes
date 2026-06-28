@@ -117,7 +117,7 @@ export class RiftRenderer {
   private simTime = 0;
   private destroyed = false;
 
-  constructor(options: RiftRendererOptions) {
+  constructor(options: RiftRendererOptions = {}) {
     if (options.canvas) {
       this.canvas = options.canvas;
     } else {
@@ -148,9 +148,10 @@ export class RiftRenderer {
     this.tick = this.tick.bind(this);
 
     // Render loop only starts once textures are in. Both flash and partic
-    // shaders sample textures every frame, so a missing texture would render
-    // as solid color (or black, with the fragment discards now in place).
-    this.textureLoad = loadTextures(gl, options.texturePath).then((tex) => {
+    // shaders sample textures every frame, so they must exist before the first
+    // draw. Textures are generated procedurally (no fetch), so this resolves
+    // on the next microtask.
+    this.textureLoad = loadTextures(gl).then((tex) => {
       this.textures = tex;
       this.lastTickTime = performance.now() / 1000;
       this.animFrameId = requestAnimationFrame(this.tick);

@@ -1,12 +1,16 @@
-// Loads every reference texture used by the loot-drop materials.
-//   T_NOISE       — M_Flash (two polar samples, REPEAT wrap)
-//   T_Light_Ring  — legacy / M_Flash variants (CLAMP)
-//   T_glow_2      — M_Partic   (soft round emissive)
-//   T_Cell_1      — M_Partic_2 (cellular dot pattern)
-//   T_Loot        — M_Partic_3 (loot-burst sprite)
-// All four M_Partic_N HLSL files are mathematically identical; they differ
-// only by which texture is bound to Texture2D_0. Selecting via shader (and
-// thus per-emitter program) avoids a runtime sampler bind.
+// Builds every texture the loot-drop materials sample, fully procedurally —
+// no network fetch, no external image files. Each entry below records which
+// material consumed it back when these were loaded as commercial sprites:
+//   noise      — M_Flash (two polar samples, REPEAT wrap)
+//   lightRing  — legacy / M_Flash variants (CLAMP)
+//   glow2      — M_Partic   (soft round emissive) — the only one a stock recipe uses
+//   cell1      — M_Partic_2 (cellular dot pattern)
+//   loot       — M_Partic_3 (loot-burst sprite)
+//   sphere     — M_Sphere   (translucent glass orb)
+// The commercial reference sprites were never redistributable, so the package
+// always degraded to these procedural stand-ins anyway; generating them
+// directly avoids six guaranteed-404 requests (and their console warnings) on
+// every consumer that doesn't ship its own atlas.
 
 export interface TextureSet {
   noise: WebGLTexture;
@@ -17,21 +21,8 @@ export interface TextureSet {
   sphere: WebGLTexture;
 }
 
-const TEXTURE_FILES = {
-  noise: 'T_NOISE.PNG',
-  lightRing: 'T_Light_Ring.PNG',
-  glow2: 'T_glow_2.PNG',
-  cell1: 'T_Cell_1.PNG',
-  loot: 'T_Loot.PNG',
-  // Hand-shaded translucent glass orb — the literal body of every drop.
-  // The procedural M_Sphere annulus can't reproduce its rim light / internal
-  // gradient, so we render it as an additive sprite (the 'orb' layer).
-  sphere: 'T_SPHERE_texture.PNG',
-} as const;
-
-// Soft round emissive blob — the shape of T_glow_2 and a fine stand-in for any
-// of the sprite textures. Used as the procedural fallback so the published demo
-// renders even though the commercial reference/ textures aren't redistributed.
+// Soft round emissive blob — the shape of the old T_glow_2 and a fine stand-in
+// for any of the sprite textures. This is the body of every stock particle.
 function makeGlowCanvas(size = 128): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = size;
@@ -46,8 +37,8 @@ function makeGlowCanvas(size = 128): HTMLCanvasElement {
   return c;
 }
 
-// Tiling grey value-noise — the REPEAT-wrapped T_NOISE fallback (unused by the
-// current procedural recipes, but kept seam-tolerant just in case).
+// Tiling grey value-noise — the REPEAT-wrapped noise source (unused by the
+// current procedural recipes, but kept seam-tolerant for opt-in flash kinds).
 function makeNoiseCanvas(size = 128): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = size;
@@ -60,22 +51,6 @@ function makeNoiseCanvas(size = 128): HTMLCanvasElement {
   }
   ctx.putImageData(img, 0, 0);
   return c;
-}
-
-// Resolve with the loaded image, or — if it 404s / errors — a procedural
-// fallback, so a missing texture set degrades gracefully instead of rejecting
-// the whole renderer (which would leave the demo a blank canvas).
-function loadImage(src: string, fallback: () => TexImageSource): Promise<TexImageSource> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = () => {
-      console.warn(`[rift-echoes] texture ${src} failed to load — using procedural fallback`);
-      resolve(fallback());
-    };
-    img.src = src;
-  });
 }
 
 function uploadTexture(
@@ -94,27 +69,17 @@ function uploadTexture(
   return tex;
 }
 
-export async function loadTextures(
-  gl: WebGL2RenderingContext,
-  basePath: string,
-): Promise<TextureSet> {
-  const base = basePath.endsWith('/') ? basePath : basePath + '/';
-  const [noiseImg, ringImg, glow2Img, cell1Img, lootImg, sphereImg] = await Promise.all([
-    loadImage(base + TEXTURE_FILES.noise, makeNoiseCanvas),
-    loadImage(base + TEXTURE_FILES.lightRing, makeGlowCanvas),
-    loadImage(base + TEXTURE_FILES.glow2, makeGlowCanvas),
-    loadImage(base + TEXTURE_FILES.cell1, makeGlowCanvas),
-    loadImage(base + TEXTURE_FILES.loot, makeGlowCanvas),
-    loadImage(base + TEXTURE_FILES.sphere, makeGlowCanvas),
-  ]);
+// Generation is synchronous, but the signature stays Promise-returning so the
+// renderer's `ready()` flow (and any consumer awaiting it) is unchanged.
+export async function loadTextures(gl: WebGL2RenderingContext): Promise<TextureSet> {
   return {
-    // T_NOISE is a tiling cloud — REPEAT wrap so the polar UV pan never seams.
-    noise: uploadTexture(gl, noiseImg, gl.REPEAT),
+    // Tiling cloud — REPEAT wrap so the polar UV pan never seams.
+    noise: uploadTexture(gl, makeNoiseCanvas(), gl.REPEAT),
     // Centered radial / sprite-like — clamp so edges stay black.
-    lightRing: uploadTexture(gl, ringImg, gl.CLAMP_TO_EDGE),
-    glow2:     uploadTexture(gl, glow2Img, gl.CLAMP_TO_EDGE),
-    cell1:     uploadTexture(gl, cell1Img, gl.CLAMP_TO_EDGE),
-    loot:      uploadTexture(gl, lootImg, gl.CLAMP_TO_EDGE),
-    sphere:    uploadTexture(gl, sphereImg, gl.CLAMP_TO_EDGE),
+    lightRing: uploadTexture(gl, makeGlowCanvas(), gl.CLAMP_TO_EDGE),
+    glow2:     uploadTexture(gl, makeGlowCanvas(), gl.CLAMP_TO_EDGE),
+    cell1:     uploadTexture(gl, makeGlowCanvas(), gl.CLAMP_TO_EDGE),
+    loot:      uploadTexture(gl, makeGlowCanvas(), gl.CLAMP_TO_EDGE),
+    sphere:    uploadTexture(gl, makeGlowCanvas(), gl.CLAMP_TO_EDGE),
   };
 }

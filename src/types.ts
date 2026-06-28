@@ -59,6 +59,4 @@ export interface RarityConfig {
 
 export interface RiftRendererOptions {
   canvas?: HTMLCanvasElement;
-  /** Folder path (served URL) holding T_NOISE.PNG, T_glow_2.PNG, etc. */
-  texturePath: string;
 }
